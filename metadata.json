@@ -1,0 +1,10 @@
+{
+  "name": "Natasha - Conversational Voice Agent",
+  "description": "Voice-first intelligent companion and document analyst with real-time speech dialogue and document grounding.",
+  "requestFramePermissions": [
+    "microphone"
+  ],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}
