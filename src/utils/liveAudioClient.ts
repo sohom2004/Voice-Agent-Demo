@@ -73,7 +73,8 @@ export class LiveAudioClient {
             JSON.stringify({
               type: 'init',
               voiceName: voiceName === 'browser' ? 'Kore' : voiceName,
-              documents: documents.filter((d) => d.enabled),
+              activeDocumentIds: documents.filter((d) => d.enabled).map((d) => d.id),
+              workspaceId: 'default_workspace'
             })
           );
         };
@@ -147,7 +148,7 @@ export class LiveAudioClient {
         if (this.isMuted || !this.ws || this.ws.readyState !== WebSocket.OPEN) return;
 
         const float32 = e.inputBuffer.getChannelData(0);
-        
+
         // Calculate RMS energy for instant speech detection & barge-in
         let sumSquares = 0;
         const int16 = new Int16Array(float32.length);
@@ -372,11 +373,11 @@ export class LiveAudioClient {
       this.mediaStream = null;
     }
     if (this.inputAudioCtx && this.inputAudioCtx.state !== 'closed') {
-      this.inputAudioCtx.close().catch(() => {});
+      this.inputAudioCtx.close().catch(() => { });
       this.inputAudioCtx = null;
     }
     if (this.outputAudioCtx && this.outputAudioCtx.state !== 'closed') {
-      this.outputAudioCtx.close().catch(() => {});
+      this.outputAudioCtx.close().catch(() => { });
       this.outputAudioCtx = null;
     }
     if (this.ws) {

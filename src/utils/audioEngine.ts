@@ -58,11 +58,11 @@ export async function playPcmAudio(
   }
 
   const arrayBuffer = base64ToArrayBuffer(base64Audio);
-  
+
   let audioBuffer: AudioBuffer;
-  
+
   // Check if it's already a WAV/MP3 container or raw PCM 16-bit
-  const isWav = arrayBuffer.byteLength > 4 && 
+  const isWav = arrayBuffer.byteLength > 4 &&
     String.fromCharCode(...new Uint8Array(arrayBuffer.slice(0, 4))) === 'RIFF';
 
   if (isWav) {
@@ -126,7 +126,7 @@ export function speakWithBrowser(
   utterance.pitch = pitch;
 
   const voices = window.speechSynthesis.getVoices();
-  
+
   // Detect language from text characters
   let matchedVoice: SpeechSynthesisVoice | undefined;
   if (/[\u0900-\u097F]/.test(text)) {
@@ -151,19 +151,19 @@ export function speakWithBrowser(
 
   // If no non-Latin match, check for Indian English voice for English text
   if (!matchedVoice) {
-    matchedVoice = voices.find(v => 
-      v.lang.toLowerCase().includes('en-in') || 
+    matchedVoice = voices.find(v =>
+      v.lang.toLowerCase().includes('en-in') ||
       v.name.toLowerCase().includes('india') ||
       v.name.toLowerCase().includes('heera') ||
       v.name.toLowerCase().includes('neerja') ||
       v.name.toLowerCase().includes('kavya')
-    ) || voices.find(v => 
-      v.lang.startsWith('en') && 
+    ) || voices.find(v =>
+      v.lang.startsWith('en') &&
       (v.name.toLowerCase().includes('female') ||
-       v.name.toLowerCase().includes('samantha') ||
-       v.name.toLowerCase().includes('karen') ||
-       v.name.toLowerCase().includes('natural') ||
-       v.name.toLowerCase().includes('google'))
+        v.name.toLowerCase().includes('samantha') ||
+        v.name.toLowerCase().includes('karen') ||
+        v.name.toLowerCase().includes('natural') ||
+        v.name.toLowerCase().includes('google'))
     ) || voices.find(v => v.lang.startsWith('en')) || voices[0];
   }
 
@@ -205,8 +205,8 @@ export function createSpeechRecognizer(
   if (!SpeechRec) {
     return {
       start: () => onError?.('Speech recognition is not supported in this browser. Please use Chrome/Edge or type your message.'),
-      stop: () => {},
-      abort: () => {},
+      stop: () => { },
+      abort: () => { },
       isSupported: false
     };
   }

@@ -15,11 +15,13 @@ export interface DocumentFile {
   name: string;
   type: string;
   size: number;
-  content: string;
+  content?: string;
   uploadedAt: number;
   summary?: string;
   suggestedQuestions?: string[];
   enabled: boolean;
+  status?: 'uploaded' | 'processing' | 'ready' | 'failed';
+  error?: string;
 }
 
 export type VoiceName = 'Kore' | 'Aoede' | 'Zephyr' | 'Puck' | 'Fenrir' | 'Charon' | 'browser';

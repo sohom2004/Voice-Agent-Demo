@@ -6,3 +6,18 @@ coverage/
 *.log
 .env*
 !.env.example
+
+# Local scratchpad and temporary uploads
+scratch/*
+!scratch/.gitkeep
+uploads/*
+!uploads/.gitkeep
+
+# IDE / Editor configuration
+.vscode/
+.idea/
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.swp

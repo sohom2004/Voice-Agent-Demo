@@ -35,8 +35,61 @@ export default function App() {
   ]);
 
   // Documents
-  const [documents, setDocuments] = useState<DocumentFile[]>(SAMPLE_DOCUMENTS);
+  const [documents, setDocuments] = useState<DocumentFile[]>([]);
   const [isDocsDrawerOpen, setIsDocsDrawerOpen] = useState(false);
+
+  // Load documents on mount
+  useEffect(() => {
+    const fetchDocs = async () => {
+      try {
+        const res = await fetch('/api/documents?workspaceId=default_workspace');
+        if (res.ok) {
+          const data = await res.json();
+          // Initially, enable everything retrieved
+          setDocuments(data.map((d: any) => ({
+            ...d,
+            type: d.fileType || d.type,
+            enabled: true
+          })));
+        }
+      } catch (err) {
+        console.error('Failed to fetch documents on mount:', err);
+      }
+    };
+    fetchDocs();
+  }, []);
+
+  // Poll documents if any are processing
+  useEffect(() => {
+    const hasUnfinished = documents.some(
+      doc => doc.status === 'uploaded' || doc.status === 'processing'
+    );
+    if (!hasUnfinished) return;
+
+    const interval = setInterval(async () => {
+      try {
+        const res = await fetch('/api/documents?workspaceId=default_workspace');
+        if (res.ok) {
+          const data = await res.json();
+          setDocuments(prev => {
+            // Merge status changes but keep the client-side enabled state
+            return data.map((d: any) => {
+              const existing = prev.find(p => p.id === d.id);
+              return {
+                ...d,
+                type: d.fileType || d.type,
+                enabled: existing ? existing.enabled : true
+              };
+            });
+          });
+        }
+      } catch (err) {
+        console.warn('Document status polling failed:', err);
+      }
+    }, 2000);
+
+    return () => clearInterval(interval);
+  }, [documents]);
 
   // Agent State & Speech
   const [agentState, setAgentState] = useState<AgentState>('idle');
@@ -270,7 +323,8 @@ export default function App() {
         body: JSON.stringify({
           message: text.trim(),
           history: newHistory.slice(-10),
-          documents: documents.filter(d => d.enabled),
+          activeDocumentIds: documents.filter(d => d.enabled).map(d => d.id),
+          workspaceId: 'default_workspace',
           voiceName: settings.selectedVoice,
           generateAudio: settings.autoSpeak && settings.selectedVoice !== 'browser',
         }),
@@ -412,16 +466,38 @@ export default function App() {
     setDocuments(prev => prev.map(d => d.id === id ? { ...d, enabled: !d.enabled } : d));
   };
 
-  const handleDeleteDocument = (id: string) => {
-    setDocuments(prev => prev.filter(d => d.id !== id));
+  const handleDeleteDocument = async (id: string) => {
+    try {
+      await fetch(`/api/documents/${id}`, { method: 'DELETE' });
+      setDocuments(prev => prev.filter(d => d.id !== id));
+    } catch (err) {
+      console.error('Failed to delete document:', err);
+    }
   };
 
   const handleAddDocuments = (newDocs: DocumentFile[]) => {
     setDocuments(prev => [...prev, ...newDocs]);
   };
 
-  const handleResetSamples = () => {
-    setDocuments(SAMPLE_DOCUMENTS);
+  const handleResetSamples = async () => {
+    try {
+      setDocuments([]);
+      const res = await fetch('/api/documents/reset-samples', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ workspaceId: 'default_workspace' })
+      });
+      if (res.ok) {
+        const data = await res.json();
+        setDocuments(data.map((d: any) => ({
+          ...d,
+          type: d.fileType || d.type,
+          enabled: true
+        })));
+      }
+    } catch (err) {
+      console.error('Failed to reset sample documents:', err);
+    }
   };
 
   // Test voice preview in settings
