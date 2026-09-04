@@ -7,7 +7,7 @@ dotenv.config();
 export class EmbeddingProvider implements IEmbeddingProvider {
   private ai: GoogleGenAI;
   private modelName = 'gemini-embedding-2';
-  private dimension = 3072; // gemini-embedding-2 returns 3072 dimension vectors
+  private dimension = 768;
 
   constructor() {
     const apiKey = process.env.GEMINI_API_KEY;
@@ -28,15 +28,30 @@ export class EmbeddingProvider implements IEmbeddingProvider {
     return this.dimension;
   }
 
+  private normalizeVector(values: number[]): number[] {
+    let vector = values;
+    if (vector.length > this.dimension) {
+      vector = vector.slice(0, this.dimension);
+    }
+    let sumSquares = 0;
+    for (const v of vector) sumSquares += v * v;
+    const norm = Math.sqrt(sumSquares);
+    if (!norm || !Number.isFinite(norm)) return vector;
+    return vector.map(v => v / norm);
+  }
+
   async embed(text: string): Promise<number[]> {
     try {
       const response = await this.ai.models.embedContent({
         model: this.modelName,
         contents: text,
+        config: {
+          outputDimensionality: this.dimension,
+        },
       });
 
       if (response.embeddings && response.embeddings.length > 0) {
-        return response.embeddings[0].values;
+        return this.normalizeVector(response.embeddings[0].values);
       }
       throw new Error('No embedding returned from Gemini API.');
     } catch (err) {
@@ -49,14 +64,16 @@ export class EmbeddingProvider implements IEmbeddingProvider {
     if (texts.length === 0) return [];
     
     try {
-      // The SDK's embedContent supports passing an array of strings in `contents`
       const response = await this.ai.models.embedContent({
         model: this.modelName,
         contents: texts,
+        config: {
+          outputDimensionality: this.dimension,
+        },
       });
 
       if (response.embeddings && response.embeddings.length === texts.length) {
-        return response.embeddings.map(e => e.values);
+        return response.embeddings.map(e => this.normalizeVector(e.values));
       }
       
       // Fallback: If it didn't return matches or failed batching, embed concurrently in batches of 5

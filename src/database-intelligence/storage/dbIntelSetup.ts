@@ -12,8 +12,27 @@ export async function setupDbIntelDatabase(): Promise<{ usePgVector: boolean }> 
     console.warn('[DB Intel Setup] Error checking for pgvector:', err);
   }
 
-  const vectorType = usePgVector ? 'vector(3072)' : 'real[]';
+  const vectorType = usePgVector ? 'vector(768)' : 'real[]';
   console.log(`[DB Intel Setup] pgvector status: ${usePgVector}. Embedding type: ${vectorType}`);
+
+  // Helper to ensure table embedding dimension is vector(768)
+  const migrateColumnDimension = async (tableName: string) => {
+    if (!usePgVector) return;
+    try {
+      const typeCheck = await pool.query(`
+        SELECT format_type(a.atttypid, a.atttypmod) AS data_type
+        FROM pg_attribute a
+        WHERE a.attrelid = $1::regclass AND a.attname = 'embedding' AND a.attnum > 0;
+      `, [tableName]);
+      if (typeCheck.rows.length > 0 && typeCheck.rows[0].data_type !== 'vector(768)') {
+        console.log(`[DB Intel Setup] Migrating ${tableName}.embedding from ${typeCheck.rows[0].data_type} to vector(768)...`);
+        await pool.query(`DROP INDEX IF EXISTS idx_${tableName}_embed_hnsw;`);
+        await pool.query(`ALTER TABLE ${tableName} ALTER COLUMN embedding TYPE vector(768) USING NULL;`);
+      }
+    } catch (e) {
+      console.warn(`[DB Intel Setup] ${tableName} dimension check notice:`, e);
+    }
+  };
 
   // 2. Create connections table
   await pool.query(`
@@ -122,6 +141,9 @@ export async function setupDbIntelDatabase(): Promise<{ usePgVector: boolean }> 
     CREATE INDEX IF NOT EXISTS idx_db_sem_desc_fts ON db_semantic_metadata USING gin(to_tsvector('english', semantic_description));
     CREATE INDEX IF NOT EXISTS idx_db_cap_desc_fts ON db_capabilities USING gin(to_tsvector('english', description));
   `);
+
+  await migrateColumnDimension('db_semantic_metadata');
+  await migrateColumnDimension('db_capabilities');
 
   // 9. Add HNSW indexing if pgvector is enabled, or fallback index
   if (usePgVector) {

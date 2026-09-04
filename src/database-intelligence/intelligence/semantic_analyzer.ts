@@ -146,8 +146,7 @@ Structure:
     try {
       return await this.embedProvider.embed(text);
     } catch (err) {
-      console.warn('[Semantic Analyzer] Embedding generation failed:', err);
-      return new Array(3072).fill(0); // Return empty zero vector on failure to prevent table insert crashes
+      return new Array(768).fill(0); // Return empty zero vector on failure to prevent table insert crashes
     }
   }
 }

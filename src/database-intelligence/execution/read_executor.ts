@@ -24,6 +24,11 @@ export class ReadExecutor {
       
       console.log(`[Read Executor] Executed query on connection ${connectionId} (provider: ${connection.provider}). Latency: ${latencyMs}ms. Row count: ${rows.length}`);
       
+      // #oogabooga
+      const fetchedColumns = rows.length > 0 ? Object.keys(rows[0]) : [];
+      console.log('[Read Executor #oogabooga] Database Columns Fetched:', fetchedColumns);
+      console.log('[Read Executor #oogabooga] Data Model is Reading:', JSON.stringify(rows, null, 2));
+      
       return rows;
     } finally {
       await connector.disconnect();

@@ -67,7 +67,7 @@ export async function setupDatabase(): Promise<{ usePgVector: boolean }> {
 
     // 3. Create document_chunks table
     if (usePgVector) {
-      // Create table with vector column (dimension 3072 for gemini-embedding-2)
+      // Create table with vector column (dimension 768 for gemini-embedding-2 Matryoshka)
       await client.query(`
         CREATE TABLE IF NOT EXISTS document_chunks (
           id VARCHAR(100) PRIMARY KEY,
@@ -78,10 +78,26 @@ export async function setupDatabase(): Promise<{ usePgVector: boolean }> {
           chunk_index INT NOT NULL,
           content TEXT NOT NULL,
           metadata JSONB NOT NULL,
-          embedding vector(3072),
+          embedding vector(768),
           created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
         );
       `);
+
+      // Ensure dimension is 768
+      try {
+        const typeCheck = await client.query(`
+          SELECT format_type(a.atttypid, a.atttypmod) AS data_type
+          FROM pg_attribute a
+          WHERE a.attrelid = 'document_chunks'::regclass AND a.attname = 'embedding' AND a.attnum > 0;
+        `);
+        if (typeCheck.rows.length > 0 && typeCheck.rows[0].data_type !== 'vector(768)') {
+          console.log(`[DB Setup] Migrating document_chunks.embedding from ${typeCheck.rows[0].data_type} to vector(768)...`);
+          await client.query(`DROP INDEX IF EXISTS document_chunks_embedding_hnsw;`);
+          await client.query(`ALTER TABLE document_chunks ALTER COLUMN embedding TYPE vector(768) USING NULL;`);
+        }
+      } catch (e) {
+        console.warn('[DB Setup] document_chunks dimension check notice:', e);
+      }
 
       // HNSW index on embedding for ultra-fast vector search
       // Note: We use cosine distance operator (vector_cosine_ops)
