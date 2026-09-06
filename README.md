@@ -58,7 +58,18 @@ npm run dev:voice-agent
 - FastAPI: http://localhost:8000
 - API docs: http://localhost:8000/docs
 
-## sql-mcp
+### Document ingestion
+
+Uploaded documents are processed automatically by a **Python background worker** inside the FastAPI backend:
+
+1. Poll for documents with `uploaded` status
+2. Parse (txt, md, pdf, docx, xlsx, csv)
+3. Chunk with section-aware splitting
+4. Generate Gemini embeddings (`gemini-embedding-2`)
+5. Index chunks into the platform database (PostgreSQL or SQLite fallback)
+6. Mark document as `ready`
+
+The legacy Node ingestion worker (`npm run ingestion-worker`) is no longer started by the backend.
 
 The `sql-mcp` package exposes safe database tools:
 
