@@ -16,10 +16,10 @@ import {
   createSpeechRecognizer, 
   SpeechRecognitionController 
 } from './utils/audioEngine';
-import { LiveAudioClient } from './utils/liveAudioClient';
+import { LiveKitClient } from './utils/liveKitClient';
 import { LayoutDashboard, MessageSquare, Database, Terminal, Shield } from 'lucide-react';
 
-const INITIAL_GREETING = "Hi there! I'm Natasha. I'm connected with db-agent and ready to converse in real time. Ask me about your database, tables, columns, or uploaded documents!";
+const INITIAL_GREETING = "Hi there! I'm Natasha. I'm connected via LiveKit with sql-mcp database access. Ask me about your data or uploaded documents!";
 
 export default function App() {
   // Main View Switcher: 'dashboard' (Live DB Context & Logs) or 'chat' (Transcript)
@@ -117,7 +117,7 @@ export default function App() {
   });
 
   const recognizerRef = useRef<SpeechRecognitionController | null>(null);
-  const liveClientRef = useRef<LiveAudioClient | null>(null);
+  const liveClientRef = useRef<LiveKitClient | null>(null);
   const isListeningRef = useRef(false);
   const lastSpokenUserUtterance = useRef<string>('');
 
@@ -125,7 +125,7 @@ export default function App() {
 
   // Initialize Live Audio Client
   useEffect(() => {
-    const client = new LiveAudioClient({
+    const client = new LiveKitClient({
       onStatusChange: (status) => {
         setLiveStatus(status);
         if (status === 'connected') {
@@ -490,7 +490,7 @@ export default function App() {
           </div>
           <div className="text-xs text-slate-400 font-mono hidden md:flex items-center space-x-2 px-3">
             <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
-            <span>db-agent Manifest Active</span>
+            <span>sql-mcp + LiveKit Active</span>
           </div>
         </div>
 

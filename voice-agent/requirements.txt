@@ -1,0 +1,6 @@
+livekit-agents>=1.0.0
+livekit-plugins-google>=1.0.0
+livekit-plugins-silero>=1.0.0
+python-dotenv>=1.0.1
+mcp>=1.6.0
+psycopg2-binary>=2.9.10

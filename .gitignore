@@ -7,6 +7,16 @@ coverage/
 .env*
 !.env.example
 
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+
+# Local databases
+*.db
+!uploads/.gitkeep
+
 # Local scratchpad and temporary uploads
 scratch/*
 !scratch/.gitkeep

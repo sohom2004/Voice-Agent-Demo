@@ -5,7 +5,7 @@ export interface DebugLogEvent {
   id: string;
   timestamp: string;
   type: 'INFO' | 'SPEECH_TRANSCRIPTION' | 'DB_INTROSPECTION' | 'TOOL_CALL' | 'GUARDRAIL_CHECK' | 'CONTEXT_PAYLOAD' | 'ERROR';
-  source: 'natasha_voice' | 'db_agent' | 'rag_engine' | 'system';
+  source: 'natasha_voice' | 'sql_mcp' | 'rag_engine' | 'system';
   message: string;
   details?: any;
 }
@@ -19,7 +19,7 @@ export const DebugLogTerminal: React.FC<{ initialLogs?: DebugLogEvent[] }> = () 
 
   const fetchLogs = async () => {
     try {
-      const res = await fetch('/api/db-agent/logs');
+      const res = await fetch('/api/sql-mcp/logs');
       if (res.ok) {
         const data = await res.json();
         setLogs(data);

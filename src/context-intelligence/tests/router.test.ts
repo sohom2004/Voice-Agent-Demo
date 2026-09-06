@@ -2,9 +2,8 @@ import { contextOrchestrator } from '../context_orchestrator';
 import { retrievalExecutor } from '../retrieval_executor';
 import { evidenceEngine } from '../evidence/evidence_engine';
 import { evidenceGate } from '../evidence/evidence_gate';
-import { sessionMemory } from '../../database-intelligence/memory/session_memory';
+import { sessionMemory } from '../memory/session_memory';
 import { setupDatabase } from '../../storage/dbSetup';
-import { setupDbIntelDatabase } from '../../database-intelligence/storage/dbIntelSetup';
 import dotenv from 'dotenv';
 
 dotenv.config();
@@ -31,7 +30,6 @@ async function runRouterTests() {
   try {
     // 0. Setup DB connection
     await setupDatabase();
-    await setupDbIntelDatabase();
 
     const testSessionId = `test_session_${Date.now()}`;
     const testWorkspaceId = 'default_workspace';
