@@ -1,0 +1,20 @@
+[project]
+name = "sql-mcp"
+version = "0.1.0"
+description = "SQL MCP server for safe database reads and writes"
+requires-python = ">=3.10"
+dependencies = [
+  "mcp>=1.6.0",
+  "psycopg2-binary>=2.9.10",
+]
+
+[project.scripts]
+sql-mcp = "sql_mcp.server:main"
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["sql_mcp*"]

@@ -34,9 +34,10 @@ export interface VoiceSettings {
   selectedVoice: VoiceName;
   speechRate: number;
   pitch: number;
-  autoSpeak: boolean;
+  autoSpeak?: boolean;
   continuousMode: boolean;
-  useGeminiTTS: boolean;
-  liveModeEnabled: boolean;
+  useGeminiTTS?: boolean;
+  liveModeEnabled?: boolean;
+  theme?: 'dark' | 'light';
 }
 

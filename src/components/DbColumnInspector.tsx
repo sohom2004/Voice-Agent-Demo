@@ -55,7 +55,7 @@ export const DbColumnInspector: React.FC<{ tenantId?: string }> = ({ tenantId = 
   const fetchContext = async () => {
     setLoading(true);
     try {
-      const res = await fetch(`/api/db-agent/column-context?tenantId=${tenantId}`);
+      const res = await fetch(`/api/sql-mcp/column-context?tenantId=${tenantId}`);
       if (res.ok) {
         const json = await res.json();
         setData(json);
@@ -92,7 +92,7 @@ export const DbColumnInspector: React.FC<{ tenantId?: string }> = ({ tenantId = 
     };
 
     try {
-      const res = await fetch('/api/db-agent/connect-database', {
+      const res = await fetch('/api/sql-mcp/connect-database', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ tenantId, config })

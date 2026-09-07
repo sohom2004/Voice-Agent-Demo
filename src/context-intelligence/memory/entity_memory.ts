@@ -1,5 +1,5 @@
 import { ContextEntity } from '../types';
-import { sessionMemory } from '../../database-intelligence/memory/session_memory';
+import { sessionMemory } from './session_memory';
 
 export class EntityMemory {
   /**
