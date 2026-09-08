@@ -69,9 +69,9 @@ export const DocumentDrawer: React.FC<DocumentDrawerProps> = ({
         const docItem: DocumentFile = {
           id: data.id,
           name: data.name,
-          type: data.fileType,
-          size: data.size,
-          uploadedAt: data.uploadedAt,
+          type: data.fileType || data.file_type || data.type || 'txt',
+          size: data.size || 0,
+          uploadedAt: data.uploadedAt || data.uploaded_at || Date.now(),
           enabled: true,
           status: data.status,
           summary: 'Queued for parsing and indexing...',
@@ -218,7 +218,7 @@ export const DocumentDrawer: React.FC<DocumentDrawerProps> = ({
                       <div className="flex items-center justify-between gap-2">
                         <div className="flex items-center gap-2.5 min-w-0">
                           <span className="w-8 h-8 rounded-lg bg-emerald-500/20 border border-emerald-400/20 flex items-center justify-center text-emerald-400 text-[10px] font-bold font-mono">
-                            {doc.type.toUpperCase()}
+                            {(doc.type || 'FILE').toUpperCase().slice(0, 4)}
                           </span>
                           <div className="min-w-0">
                             <p className="text-xs font-medium text-white truncate" title={doc.name}>

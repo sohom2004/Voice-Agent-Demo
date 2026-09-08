@@ -144,6 +144,27 @@ class DocumentService:
         conn.row_factory = sqlite3.Row
         return conn
 
+    def _serialize_document(self, row: Any) -> dict[str, Any]:
+        data = dict(row)
+        storage_path = data.get("storage_path") or data.get("storagePath")
+        file_type = data.get("file_type") or data.get("fileType") or data.get("type") or "txt"
+        return {
+            "id": data.get("id"),
+            "workspaceId": data.get("workspace_id") or data.get("workspaceId"),
+            "workspace_id": data.get("workspace_id") or data.get("workspaceId"),
+            "name": data.get("name"),
+            "fileType": file_type,
+            "file_type": file_type,
+            "type": file_type,
+            "storagePath": storage_path,
+            "storage_path": storage_path,
+            "status": data.get("status"),
+            "error": data.get("error"),
+            "size": data.get("size") or 0,
+            "uploadedAt": data.get("uploaded_at") or data.get("uploadedAt") or 0,
+            "uploaded_at": data.get("uploaded_at") or data.get("uploadedAt") or 0,
+        }
+
     async def list_documents(self, workspace_id: str) -> list[dict[str, Any]]:
         if self.use_sqlite:
             conn = self._sqlite_conn()
@@ -152,23 +173,23 @@ class DocumentService:
                 (workspace_id,),
             ).fetchall()
             conn.close()
-            return [dict(row) for row in rows]
+            return [self._serialize_document(row) for row in rows]
         assert self.pool is not None
         rows = await self.pool.fetch(
             "SELECT * FROM documents WHERE workspace_id = $1 ORDER BY uploaded_at DESC",
             workspace_id,
         )
-        return [dict(row) for row in rows]
+        return [self._serialize_document(row) for row in rows]
 
     async def get_document(self, doc_id: str) -> dict[str, Any] | None:
         if self.use_sqlite:
             conn = self._sqlite_conn()
             row = conn.execute("SELECT * FROM documents WHERE id = ?", (doc_id,)).fetchone()
             conn.close()
-            return dict(row) if row else None
+            return self._serialize_document(row) if row else None
         assert self.pool is not None
         row = await self.pool.fetchrow("SELECT * FROM documents WHERE id = $1", doc_id)
-        return dict(row) if row else None
+        return self._serialize_document(row) if row else None
 
     async def get_unprocessed_documents(self) -> list[dict[str, Any]]:
         pending = ("uploaded", "processing", "embedding")

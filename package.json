@@ -6,8 +6,8 @@
   "scripts": {
     "dev": "concurrently -k \"npm run dev:backend\" \"npm run dev:frontend\"",
     "dev:frontend": "vite",
-    "dev:backend": "cd backend && python3 -m uvicorn app.main:app --reload --host 0.0.0.0 --port 8000",
-    "dev:voice-agent": "cd voice-agent && python3 agent.py dev",
+    "dev:backend": "cd backend && python -m uvicorn app.main:app --reload --host 0.0.0.0 --port 8000",
+    "dev:voice-agent": "cd voice-agent && python agent.py dev",
     "ingestion-worker": "npx tsx src/knowledge-ingestion/worker-run.ts",
     "build": "vite build",
     "preview": "vite preview",

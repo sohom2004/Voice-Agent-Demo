@@ -53,7 +53,7 @@ export default function App() {
           const data = await res.json();
           setDocuments(data.map((d: any) => ({
             ...d,
-            type: d.fileType || d.type,
+            type: d.fileType || d.file_type || d.type || 'txt',
             enabled: true
           })));
         }
@@ -81,7 +81,7 @@ export default function App() {
               const existing = prev.find(p => p.id === d.id);
               return {
                 ...d,
-                type: d.fileType || d.type,
+                type: d.fileType || d.file_type || d.type || 'txt',
                 enabled: existing ? existing.enabled : true
               };
             });
@@ -399,7 +399,7 @@ export default function App() {
         const data = await res.json();
         setDocuments(data.map((d: any) => ({
           ...d,
-          type: d.fileType || d.type,
+          type: d.fileType || d.file_type || d.type || 'txt',
           enabled: true
         })));
       }

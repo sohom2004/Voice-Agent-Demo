@@ -5,16 +5,20 @@ import os
 import sys
 from pathlib import Path
 
-# Allow importing sql-mcp from sibling directory
-ROOT = Path(__file__).resolve().parents[2]
+# Allow importing sql-mcp from the sibling directory even if it wasn't
+# `pip install -e`'d (parents[3] = repo root: services -> app -> backend -> root).
+ROOT = Path(__file__).resolve().parents[3]
 SQL_MCP_ROOT = ROOT / "sql-mcp"
 if str(SQL_MCP_ROOT) not in sys.path:
     sys.path.insert(0, str(SQL_MCP_ROOT))
 
 from sql_mcp.engine import SqlMcpEngine
+from sql_mcp.manifest import to_raw_schema
 from sql_mcp.models import ConnectionConfig
 
 from ..config import settings
+
+RUN_CUSTOM_READ_QUERY = "run_custom_read_query"
 
 
 class SqlMcpService:
@@ -62,11 +66,44 @@ class SqlMcpService:
             self.log("DB_INTROSPECTION", f"Connected database for tenant {tenant_id}", config)
             return self.get_column_context(tenant_id)
 
+    def _manifest_tool_defs(self, engine: SqlMcpEngine) -> list[dict]:
+        """Compiled fast-path tools in {name, description, input_schema} shape
+        (see sql_mcp/manifest.py). Introspection + compilation runs once and
+        is cached on the engine by schema hash, so this is cheap to call
+        repeatedly — it's what makes the "Compiled db-agent Tools" panel and
+        the chat tool loop both reflect the real schema instead of a
+        generic list_tables/describe_table/execute_read/execute_write set."""
+        manifest = engine.compile_manifest()
+        tools = [
+            {
+                "name": raw["name"],
+                "description": raw["description"],
+                "input_schema": raw["parameters"],
+            }
+            for raw in (to_raw_schema(t) for t in manifest.tools)
+        ]
+        tools.append(
+            {
+                "name": RUN_CUSTOM_READ_QUERY,
+                "description": (
+                    "LAST RESORT: run a read-only SQL SELECT for analytics or joins "
+                    "that none of the specific tools above can express. Prefer a "
+                    "specific tool whenever one fits."
+                ),
+                "input_schema": {
+                    "type": "object",
+                    "properties": {"sql": {"type": "string"}},
+                    "required": ["sql"],
+                },
+            }
+        )
+        return tools
+
     def get_column_context(self, tenant_id: str = "default_tenant") -> dict:
         try:
             engine = self.get_engine(tenant_id)
             snapshot = engine.get_schema_snapshot()
-            tools = engine.get_tool_definitions()
+            tools = self._manifest_tool_defs(engine)
             return {
                 "tenantId": tenant_id,
                 "dialect": snapshot.dialect,
@@ -100,14 +137,17 @@ class SqlMcpService:
     async def call_tool(self, tenant_id: str, tool_name: str, args: dict) -> dict:
         engine = self.get_engine(tenant_id)
         self.log("TOOL_CALL", f"Tool call: {tool_name}", {"args": args})
-        result = engine.call_tool(tool_name, args)
+        if tool_name == RUN_CUSTOM_READ_QUERY:
+            result = engine.execute_read(args.get("sql", ""))
+        else:
+            result = engine.call_manifest_tool(tool_name, args)
         self.log("GUARDRAIL_CHECK", f"{tool_name} -> {result.get('status')}", result)
         return result
 
     def get_gemini_tools(self, tenant_id: str = "default_tenant") -> list[dict]:
         engine = self.get_engine(tenant_id)
         tools = []
-        for item in engine.get_tool_definitions():
+        for item in self._manifest_tool_defs(engine):
             tools.append(
                 {
                     "name": item["name"],
@@ -116,6 +156,14 @@ class SqlMcpService:
                 }
             )
         return tools
+
+    def get_schema_prompt_summary(self, tenant_id: str = "default_tenant") -> str:
+        from sql_mcp.manifest import describe_manifest_for_prompt
+
+        engine = self.get_engine(tenant_id)
+        manifest = engine.compile_manifest()
+        snapshot = engine.get_schema_snapshot()
+        return describe_manifest_for_prompt(manifest, snapshot)
 
 
 sql_mcp_service = SqlMcpService()

@@ -3,7 +3,6 @@ from __future__ import annotations
 from fastapi import APIRouter, HTTPException
 
 from ..services.chat import generate_chat_response, generate_tts
-from ..services.documents import document_service
 
 router = APIRouter(prefix="/api", tags=["chat"])
 
@@ -21,12 +20,16 @@ async def chat(payload: dict):
     voice_name = payload.get("selectedVoice", "Kore")
     generate_audio = payload.get("generateAudio", True)
 
-    doc_context = await document_service.retrieve_context(workspace_id, message, document_ids)
+    # Document context is no longer fetched unconditionally on every message —
+    # the model calls the search_documents tool itself only when the question
+    # is actually about uploaded documents, so a pure database question no
+    # longer pays for an embedding call + full chunk scan it doesn't need.
     return await generate_chat_response(
         message=message,
         history=history,
         tenant_id=tenant_id,
-        doc_context=doc_context,
+        workspace_id=workspace_id,
+        document_ids=document_ids,
         voice_name=voice_name,
         generate_audio=generate_audio,
     )

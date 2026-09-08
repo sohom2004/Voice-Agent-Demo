@@ -1,12 +1,9 @@
 from __future__ import annotations
 
-import asyncio
 import json
 import logging
 import os
 import sys
-import time
-from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
@@ -15,42 +12,53 @@ from dotenv import load_dotenv
 ROOT = Path(__file__).resolve().parents[1]
 load_dotenv(ROOT / ".env")
 
-# LiveKit Google realtime plugin expects GOOGLE_API_KEY; keep GEMINI_API_KEY compatible.
+# LiveKit Google realtime plugin expects GOOGLE_API_KEY.
 _GEMINI_KEY = os.getenv("GEMINI_API_KEY", "")
 _GOOGLE_KEY = os.getenv("GOOGLE_API_KEY", "")
 if _GEMINI_KEY and not _GOOGLE_KEY:
     os.environ["GOOGLE_API_KEY"] = _GEMINI_KEY
 API_KEY = os.getenv("GOOGLE_API_KEY") or _GEMINI_KEY
 
-from livekit.agents import (
+from livekit.agents import (  # noqa: E402
     Agent,
     AgentServer,
     AgentSession,
     JobContext,
-    MetricsCollectedEvent,
-    RunContext,
     cli,
     function_tool,
-    metrics,
 )
-from livekit.plugins import google
+from livekit.plugins import google  # noqa: E402
 
 SQL_MCP_ROOT = ROOT / "sql-mcp"
-BACKEND_ROOT = ROOT / "backend"
-if str(SQL_MCP_ROOT) not in sys.path:
-    sys.path.insert(0, str(SQL_MCP_ROOT))
-if str(BACKEND_ROOT) not in sys.path:
-    sys.path.insert(0, str(BACKEND_ROOT))
+DOC_RETRIEVAL_ROOT = ROOT / "doc-retrieval"
+for pkg_root in (SQL_MCP_ROOT, DOC_RETRIEVAL_ROOT):
+    if str(pkg_root) not in sys.path:
+        sys.path.insert(0, str(pkg_root))
 
-from sql_mcp.engine import SqlMcpEngine
-from sql_mcp.models import ConnectionConfig
-from app.services.documents import document_service
+from sql_mcp.engine import SqlMcpEngine  # noqa: E402
+from sql_mcp.manifest import describe_manifest_for_prompt, to_raw_schema  # noqa: E402
+from sql_mcp.models import ConnectionConfig  # noqa: E402
+
+from doc_retrieval import DocRetrievalEngine, RetrievalConfig  # noqa: E402
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("voice-agent")
 
 GEMINI_LIVE_MODEL = "gemini-3.1-flash-live-preview"
 
+
+def _resolve_db_path(raw: str) -> str:
+    path = Path(raw or "demo_database.db")
+    if not path.is_absolute():
+        path = (ROOT / path).resolve()
+    return str(path)
+
+
+# ---------------------------------------------------------------------------
+# Database: compiled fast-path tools (schema introspected once at startup).
+# ---------------------------------------------------------------------------
+
+_db_path = _resolve_db_path(os.getenv("SQL_MCP_DATABASE", "demo_database.db"))
 engine = SqlMcpEngine(
     ConnectionConfig(
         tenant_id=os.getenv("SQL_MCP_TENANT_ID", "default_tenant"),
@@ -59,204 +67,114 @@ engine = SqlMcpEngine(
         port=int(os.getenv("SQL_MCP_PORT", "5432")),
         user=os.getenv("SQL_MCP_USER", "postgres"),
         password=os.getenv("SQL_MCP_PASSWORD", "postgres"),
-        database=os.getenv("SQL_MCP_DATABASE", str(ROOT / "demo_database.db")),
+        database=_db_path,
     )
 )
 
-server = AgentServer()
-_documents_ready = asyncio.Event()
+_manifest = engine.compile_manifest()
+_schema_snapshot = engine.get_schema_snapshot()
+_DB_SCHEMA_SUMMARY = describe_manifest_for_prompt(_manifest, _schema_snapshot)
+
+logger.info(
+    "Compiled %d fast-path database tool(s) from %d table(s): %s",
+    len(_manifest.tools),
+    len(_schema_snapshot.tables),
+    ", ".join(t.name for t in _manifest.tools),
+)
 
 
-@dataclass
-class SessionContext:
-    workspace_id: str = "default_workspace"
-    document_ids: list[str] = field(default_factory=list)
-    voice_name: str = "Kore"
+def _make_fast_path_tool(tool_name: str):
+    """Build one LiveKit tool for a single compiled manifest tool."""
+
+    async def _handler(raw_arguments: dict[str, Any]) -> str:
+        result = engine.call_manifest_tool(tool_name, raw_arguments)
+        return json.dumps(result, default=str)
+
+    _handler.__name__ = tool_name
+    tool_def = _manifest.find(tool_name)
+    assert tool_def is not None
+    return function_tool(_handler, raw_schema=to_raw_schema(tool_def))
 
 
-def _parse_session_metadata(raw: str | None, attributes: dict[str, str] | None = None) -> SessionContext:
-    ctx = SessionContext()
-    attributes = attributes or {}
-
-    if attributes.get("workspace_id"):
-        ctx.workspace_id = attributes["workspace_id"]
-    if attributes.get("document_ids"):
-        try:
-            parsed_ids = json.loads(attributes["document_ids"])
-            if isinstance(parsed_ids, list):
-                ctx.document_ids = [str(x) for x in parsed_ids]
-        except json.JSONDecodeError:
-            logger.warning("Invalid document_ids attribute: %s", attributes.get("document_ids"))
-
-    if raw:
-        try:
-            data = json.loads(raw)
-            ctx.workspace_id = data.get("workspace_id") or data.get("workspaceId") or ctx.workspace_id
-            docs = data.get("document_ids") or data.get("documentIds") or ctx.document_ids
-            if isinstance(docs, list):
-                ctx.document_ids = [str(x) for x in docs]
-            ctx.voice_name = data.get("voice_name") or data.get("voiceName") or ctx.voice_name
-        except json.JSONDecodeError:
-            logger.warning("Invalid participant metadata JSON: %s", raw)
-
-    return ctx
-
-
-async def _timed_tool(name: str, sync_fn, *args, **kwargs) -> str:
-    started = time.perf_counter()
-    logger.info("[latency] tool_start name=%s", name)
-    try:
-        result = await asyncio.to_thread(sync_fn, *args, **kwargs)
-        payload = json.dumps(result)
-        logger.info(
-            "[latency] tool_complete name=%s duration_ms=%.0f",
-            name,
-            (time.perf_counter() - started) * 1000,
-        )
-        return payload
-    except Exception as exc:
-        logger.exception("[latency] tool_error name=%s error=%s", name, exc)
-        return json.dumps({"error": str(exc)})
+DB_FAST_PATH_TOOLS = [_make_fast_path_tool(t.name) for t in _manifest.tools]
 
 
 @function_tool
-async def list_tables(context: RunContext) -> str:
-    """List all tables in the connected database."""
-    return await _timed_tool("list_tables", engine.call_tool, "list_tables", {})
+async def run_custom_read_query(sql: str) -> str:
+    """LAST RESORT database tool. Run a read-only SQL SELECT for analytics
+    or joins that none of the specific get_/list_/count_ tools can express.
+    Prefer a specific table tool whenever one fits. Never use this for writes."""
+    return json.dumps(engine.execute_read(sql), default=str)
 
 
-@function_tool
-async def describe_table(context: RunContext, table_name: str) -> str:
-    """Describe columns for a database table."""
-    return await _timed_tool(
-        "describe_table",
-        engine.call_tool,
-        "describe_table",
-        {"table_name": table_name},
+# ---------------------------------------------------------------------------
+# Documents: dedicated retrieval tool (independent of sql-mcp).
+# ---------------------------------------------------------------------------
+
+_upload_dir = os.getenv("UPLOAD_DIR", "uploads")
+_upload_path = Path(_upload_dir)
+if not _upload_path.is_absolute():
+    _upload_path = (ROOT / _upload_path).resolve()
+
+doc_engine = DocRetrievalEngine(
+    RetrievalConfig(
+        upload_dir=str(_upload_path),
+        gemini_api_key=API_KEY or "",
     )
+)
 
 
 @function_tool
-async def execute_read(context: RunContext, sql: str) -> str:
-    """Run a SELECT query against the database."""
-    return await _timed_tool("execute_read", engine.call_tool, "execute_read", {"sql": sql})
+async def search_documents(query: str) -> str:
+    """Search the user's uploaded documents/files (reports, notes, policies,
+    anything they've uploaded) for information relevant to their question.
+    Use this ONLY for questions about uploaded documents — never for
+    questions about live database records like people, orders, or other
+    structured data, which have their own dedicated tools."""
+    if not doc_engine.has_any_documents():
+        return "No documents have been uploaded yet."
+    results = doc_engine.search(query, top_k=5)
+    if not results:
+        return "Nothing relevant was found in the uploaded documents."
+    return doc_engine.format_context(results)
 
 
-@function_tool
-async def execute_write(context: RunContext, sql: str, confirmed: bool = False) -> str:
-    """Run INSERT, UPDATE, or DELETE. Set confirmed=true after user approval."""
-    return await _timed_tool(
-        "execute_write",
-        engine.call_tool,
-        "execute_write",
-        {"sql": sql, "confirmed": confirmed},
-    )
+INSTRUCTIONS = f"""You are Natasha, a warm, multilingual voice assistant.
 
+You have two independent, ready-to-use capabilities. Decide which ONE fits
+the user's question and call exactly that tool — do not explore, do not ask
+the user for table names, SQL, or file names, and do not narrate which tool
+you're using.
 
-@function_tool
-async def search_documents(
-    context: RunContext,
-    query: str,
-    document_ids: list[str] | None = None,
-    top_k: int = 5,
-) -> str:
-    """
-    Search uploaded documents for relevant passages.
-    Use this when the user asks about uploaded files, contracts, reports, or policies.
-    """
-    started = time.perf_counter()
-    logger.info("[latency] tool_start name=search_documents query=%r", query[:120])
+1. DATABASE — for questions about live structured records (people, orders,
+   results, anything row-and-column shaped). The connected database has
+   these tables and columns, so you already know the shape of the data —
+   never call a tool just to discover schema, you already have it below:
+{_DB_SCHEMA_SUMMARY}
+   Use the specific get_/list_/count_/create_/update_/delete_ tool for the
+   right table. Only fall back to run_custom_read_query for read-only
+   analytics a specific tool genuinely can't express. Writes (create/update/
+   delete) require the user's explicit spoken confirmation before you pass
+   confirmed=true.
 
-    await _documents_ready.wait()
-    session_ctx: SessionContext = context.userdata
-    # Prefer explicit tool args; otherwise use the documents selected for this LiveKit session.
-    if document_ids is not None:
-        effective_ids: list[str] | None = [str(x) for x in document_ids]
-    elif session_ctx.document_ids:
-        effective_ids = list(session_ctx.document_ids)
-    else:
-        # No session selection provided — search the whole workspace.
-        effective_ids = None
+2. DOCUMENTS — for questions about uploaded files, reports, or notes. Call
+   search_documents with the user's question as the query.
 
-    try:
-        results = await document_service.search_documents(
-            session_ctx.workspace_id,
-            query,
-            effective_ids,
-            top_k=max(1, min(int(top_k or 5), 10)),
-        )
-        payload = {"results": results, "count": len(results)}
-        logger.info(
-            "[latency] tool_complete name=search_documents duration_ms=%.0f hits=%s workspace=%s docs=%s",
-            (time.perf_counter() - started) * 1000,
-            len(results),
-            session_ctx.workspace_id,
-            effective_ids,
-        )
-        return json.dumps(payload)
-    except Exception as exc:
-        logger.exception("[latency] tool_error name=search_documents error=%s", exc)
-        return json.dumps({"error": str(exc), "results": []})
+If a question could plausibly touch both, pick whichever the user's wording
+is more clearly about and answer decisively; ask a brief clarifying question
+only if it is genuinely ambiguous.
 
-
-INSTRUCTIONS = """You are Natasha, an intelligent, warm, highly adaptive, and polyglot real-time voice companion.
-Your tone is professional, conversational, approachable, empathetic, eloquent, and witty when appropriate.
-
-# LANGUAGE
-- Dynamically detect the user's language and respond in that same language.
-- Support code-mixing such as Hinglish without asking the user to configure a language.
-
-# VOICE STYLE
-- Keep answers concise and spoken aloud. Avoid markdown, bullet characters, hashtags, code fences, and raw JSON.
-- Summarize numbers and data conversationally instead of reading raw tables.
-- Never ask users for table names, SQL, or technical database details unless they ask.
-
-# DOCUMENT GROUNDING
-- When a question depends on uploaded documents, contracts, reports, policies, or file contents, call search_documents before answering.
-- Ground document answers strictly in retrieved chunks. Cite the document name and page when available.
-- If retrieval returns no sufficiently relevant information, say you could not find that information in the available documents. Do not fabricate document content.
-- Do NOT call search_documents for general knowledge, math, chitchat, or unrelated questions.
-
-# DATABASE TOOLS
-- Use list_tables, describe_table, and execute_read for live operational database questions.
-- Use execute_write only after the user clearly confirms a change.
-- Distinguish clearly between:
-  1) facts found in documents,
-  2) general knowledge,
-  3) information obtained from database tools.
-
-# TURN TAKING
-- Stop speaking immediately if the user interrupts.
-- Wait for the user to finish before responding.
+Speak naturally for voice — no markdown, bullet points, or raw JSON/SQL in
+your replies. Greet the user warmly on their first turn.
 """
 
 
-class NatashaAgent(Agent):
-    def __init__(self) -> None:
-        super().__init__(
-            instructions=INSTRUCTIONS,
-            tools=[list_tables, describe_table, execute_read, execute_write, search_documents],
-        )
+server = AgentServer()
 
 
 @server.rtc_session()
 async def entrypoint(ctx: JobContext):
     await ctx.connect()
-
-    global _documents_ready
-    if not _documents_ready.is_set():
-        if document_service.pool is None and not document_service.use_sqlite:
-            await document_service.connect()
-        _documents_ready.set()
-
-    participant = await ctx.wait_for_participant()
-    session_ctx = _parse_session_metadata(participant.metadata, dict(participant.attributes or {}))
-    logger.info(
-        "Session context workspace=%s document_ids=%s voice=%s",
-        session_ctx.workspace_id,
-        session_ctx.document_ids,
-        session_ctx.voice_name,
-    )
 
     if not API_KEY:
         raise RuntimeError("GEMINI_API_KEY or GOOGLE_API_KEY is required for Gemini Live.")
@@ -265,53 +183,19 @@ async def entrypoint(ctx: JobContext):
     session = AgentSession(
         llm=google.realtime.RealtimeModel(
             model=GEMINI_LIVE_MODEL,
-            voice=session_ctx.voice_name or "Kore",
+            voice="Kore",
             api_key=API_KEY,
             instructions=INSTRUCTIONS,
         ),
-        userdata=session_ctx,
     )
 
-    usage_collector = metrics.UsageCollector()
+    agent = Agent(
+        instructions=INSTRUCTIONS,
+        tools=[*DB_FAST_PATH_TOOLS, run_custom_read_query, search_documents],
+    )
 
-    @session.on("metrics_collected")
-    def _on_metrics(ev: MetricsCollectedEvent) -> None:
-        metrics.log_metrics(ev.metrics)
-        usage_collector.collect(ev.metrics)
-        m = ev.metrics
-        metric_type = getattr(m, "type", type(m).__name__)
-        details: dict[str, Any] = {"type": metric_type}
-        for attr in (
-            "ttft",
-            "duration",
-            "end_of_utterance_delay",
-            "transcription_delay",
-            "on_user_turn_completed_delay",
-            "session_duration",
-            "tokens_per_second",
-        ):
-            if hasattr(m, attr):
-                details[attr] = getattr(m, attr)
-        logger.info("[latency] metrics %s", details)
-
-    @session.on("user_state_changed")
-    def _on_user_state(ev) -> None:
-        logger.info("[latency] user_state=%s", getattr(ev, "new_state", ev))
-
-    @session.on("agent_state_changed")
-    def _on_agent_state(ev) -> None:
-        logger.info("[latency] agent_state=%s", getattr(ev, "new_state", ev))
-
-    @session.on("function_tools_executed")
-    def _on_tools(ev) -> None:
-        names = []
-        for item in getattr(ev, "function_calls", []) or []:
-            names.append(getattr(item, "name", str(item)))
-        logger.info("[latency] tools_executed names=%s", names)
-
-    await session.start(agent=NatashaAgent(), room=ctx.room)
+    await session.start(agent=agent, room=ctx.room)
     # gemini-3.1-flash-live-preview rejects generate_reply / mid-session client content.
-    # The model greets on the user's first turn via instructions.
 
 
 if __name__ == "__main__":
