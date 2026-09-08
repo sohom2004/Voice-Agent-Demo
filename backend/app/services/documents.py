@@ -39,6 +39,7 @@ class DocumentService:
         self.pool: asyncpg.Pool | None = None
         self.sqlite_path = Path(settings.upload_dir) / "platform.db"
         self.use_sqlite = False
+        self._pg_embedding_as_text = True
         Path(settings.upload_dir).mkdir(parents=True, exist_ok=True)
 
     async def connect(self) -> None:
@@ -88,10 +89,37 @@ class DocumentService:
                   chunk_index INT NOT NULL,
                   content TEXT NOT NULL,
                   metadata JSONB DEFAULT '{}',
-                  embedding real[]
+                  embedding TEXT
                 )
                 """
             )
+            # Cache how embeddings must be bound for this DB (TEXT/vector vs real[]).
+            self._pg_embedding_as_text = await self._detect_pg_embedding_as_text(conn)
+
+    async def _detect_pg_embedding_as_text(self, conn: Any) -> bool:
+        """True when embedding column expects a string (TEXT / varchar / json / pgvector)."""
+        row = await conn.fetchrow(
+            """
+            SELECT data_type, udt_name
+            FROM information_schema.columns
+            WHERE table_schema = 'public'
+              AND table_name = 'document_chunks'
+              AND column_name = 'embedding'
+            """
+        )
+        if not row:
+            return True
+        data_type = (row["data_type"] or "").lower()
+        udt_name = (row["udt_name"] or "").lower()
+        if data_type == "array" or udt_name.startswith("_float") or udt_name.startswith("_real"):
+            return False
+        # TEXT, varchar, json/jsonb, and pgvector ("vector") all take a string bind.
+        return True
+
+    def _format_embedding_for_pg(self, embedding: list[float]) -> Any:
+        if getattr(self, "_pg_embedding_as_text", True):
+            return json.dumps(embedding)
+        return embedding
 
     def _setup_sqlite_schema(self) -> None:
         conn = sqlite3.connect(self.sqlite_path)
@@ -310,7 +338,7 @@ class DocumentService:
                     chunk.chunk_index,
                     chunk.content,
                     json.dumps(chunk.metadata),
-                    embeddings[idx],
+                    self._format_embedding_for_pg(embeddings[idx]),
                 )
 
     async def delete_document(self, doc_id: str) -> bool:

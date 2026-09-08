@@ -24,10 +24,12 @@ from livekit.agents import (  # noqa: E402
     AgentServer,
     AgentSession,
     JobContext,
+    TurnHandlingOptions,
     cli,
     function_tool,
 )
 from livekit.plugins import google  # noqa: E402
+from google.genai import types as genai_types  # noqa: E402
 
 SQL_MCP_ROOT = ROOT / "sql-mcp"
 DOC_RETRIEVAL_ROOT = ROOT / "doc-retrieval"
@@ -120,6 +122,11 @@ doc_engine = DocRetrievalEngine(
     RetrievalConfig(
         upload_dir=str(_upload_path),
         gemini_api_key=API_KEY or "",
+        pg_host=os.getenv("PGHOST", "localhost"),
+        pg_port=int(os.getenv("PGPORT", "5432")),
+        pg_user=os.getenv("PGUSER", "postgres"),
+        pg_password=os.getenv("PGPASSWORD", ""),
+        pg_database=os.getenv("PGDATABASE", "postgres"),
     )
 )
 
@@ -131,6 +138,9 @@ async def search_documents(query: str) -> str:
     Use this ONLY for questions about uploaded documents — never for
     questions about live database records like people, orders, or other
     structured data, which have their own dedicated tools."""
+    # Fresh lookup each tool call so recent uploads are visible without waiting
+    # out the short in-memory cache TTL.
+    doc_engine.invalidate()
     if not doc_engine.has_any_documents():
         return "No documents have been uploaded yet."
     results = doc_engine.search(query, top_k=5)
@@ -166,6 +176,10 @@ only if it is genuinely ambiguous.
 
 Speak naturally for voice — no markdown, bullet points, or raw JSON/SQL in
 your replies. Greet the user warmly on their first turn.
+
+# INTERRUPTIONS
+- If the user starts speaking while you are talking, stop immediately and listen.
+- Never talk over the user. Resume only after they finish.
 """
 
 
@@ -179,13 +193,32 @@ async def entrypoint(ctx: JobContext):
     if not API_KEY:
         raise RuntimeError("GEMINI_API_KEY or GOOGLE_API_KEY is required for Gemini Live.")
 
-    # Gemini Live has built-in turn detection; do not add Silero VAD or STT→LLM→TTS.
+    # Gemini Live barge-in: start-of-speech interrupts the model immediately.
+    # Keep silence_duration modest so end-of-turn stays snappy (no added latency).
     session = AgentSession(
+        turn_handling=TurnHandlingOptions(
+            turn_detection="realtime_llm",
+            interruption={
+                "enabled": True,
+                "min_duration": 0.2,
+                "resume_false_interruption": False,
+            },
+        ),
         llm=google.realtime.RealtimeModel(
             model=GEMINI_LIVE_MODEL,
             voice="Kore",
             api_key=API_KEY,
             instructions=INSTRUCTIONS,
+            realtime_input_config=genai_types.RealtimeInputConfig(
+                activity_handling=genai_types.ActivityHandling.START_OF_ACTIVITY_INTERRUPTS,
+                automatic_activity_detection=genai_types.AutomaticActivityDetection(
+                    disabled=False,
+                    start_of_speech_sensitivity=genai_types.StartSensitivity.START_SENSITIVITY_HIGH,
+                    end_of_speech_sensitivity=genai_types.EndSensitivity.END_SENSITIVITY_HIGH,
+                    prefix_padding_ms=20,
+                    silence_duration_ms=400,
+                ),
+            ),
         ),
     )
 

@@ -27,6 +27,7 @@ Latency-relevant design choices:
 from __future__ import annotations
 
 import json
+import logging
 import math
 import re
 import sqlite3
@@ -36,6 +37,8 @@ from pathlib import Path
 from typing import Any
 
 from .models import RetrievalConfig, RetrievedChunk
+
+logger = logging.getLogger("doc_retrieval")
 
 _WORD_RE = re.compile(r"[a-z0-9]+")
 
@@ -146,7 +149,7 @@ class DocRetrievalEngine:
             host=self.config.pg_host,
             port=self.config.pg_port,
             user=self.config.pg_user,
-            password=self.config.pg_password,
+            password=self.config.pg_password or None,
             dbname=self.config.pg_database,
             cursor_factory=RealDictCursor,
             connect_timeout=3,
@@ -156,7 +159,7 @@ class DocRetrievalEngine:
             if document_ids:
                 cur.execute(
                     """
-                    SELECT content, document_name, embedding
+                    SELECT content, document_name, embedding::text AS embedding
                     FROM document_chunks
                     WHERE workspace_id = %s AND document_id = ANY(%s::varchar[])
                     ORDER BY chunk_index ASC
@@ -166,7 +169,7 @@ class DocRetrievalEngine:
             else:
                 cur.execute(
                     """
-                    SELECT content, document_name, embedding
+                    SELECT content, document_name, embedding::text AS embedding
                     FROM document_chunks
                     WHERE workspace_id = %s
                     ORDER BY chunk_index ASC
@@ -178,16 +181,25 @@ class DocRetrievalEngine:
             conn.close()
 
     def _fetch_chunks(self, workspace_id: str, document_ids: list[str] | None) -> list[dict[str, Any]]:
+        # Prefer Postgres when available — ingestion writes there whenever PG is up.
+        # An empty/stale uploads/platform.db must NOT hide real Postgres chunks.
+        try:
+            pg_rows = self._fetch_chunks_postgres(workspace_id, document_ids)
+            if pg_rows:
+                return pg_rows
+        except Exception as exc:
+            logger.warning("Postgres document fetch failed: %s", exc)
+
         sqlite_path = self._sqlite_path()
         if sqlite_path.exists():
             try:
-                return self._fetch_chunks_sqlite(sqlite_path, workspace_id, document_ids)
-            except Exception:
-                return []
-        try:
-            return self._fetch_chunks_postgres(workspace_id, document_ids)
-        except Exception:
-            return []
+                sqlite_rows = self._fetch_chunks_sqlite(sqlite_path, workspace_id, document_ids)
+                if sqlite_rows:
+                    return sqlite_rows
+            except Exception as exc:
+                logger.warning("SQLite document fetch failed (%s): %s", sqlite_path, exc)
+
+        return []
 
     def _get_chunks(self, workspace_id: str, document_ids: list[str] | None) -> list[dict[str, Any]]:
         if document_ids:
@@ -215,14 +227,24 @@ class DocRetrievalEngine:
     # -- ranking -----------------------------------------------------
 
     def _parse_embedding(self, raw: Any) -> list[float] | None:
-        if not raw:
+        if raw is None or raw == "":
             return None
         if isinstance(raw, str):
+            text = raw.strip()
             try:
-                return json.loads(raw)
+                parsed = json.loads(text)
             except (TypeError, ValueError):
-                return None
-        return list(raw)
+                try:
+                    parsed = json.loads(text.replace(" ", ""))
+                except (TypeError, ValueError):
+                    return None
+            return list(parsed) if parsed is not None else None
+        if isinstance(raw, (list, tuple)):
+            return list(raw)
+        try:
+            return list(raw)
+        except TypeError:
+            return None
 
     def _keyword_rank(self, query: str, rows: list[dict[str, Any]], top_k: int) -> list[RetrievedChunk]:
         query_terms = _tokenize(query)
