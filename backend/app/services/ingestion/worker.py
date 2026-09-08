@@ -75,6 +75,9 @@ class IngestionWorker:
             chunks = self._chunker.chunk(canonical)
             logger.info("[%s] Generated %s chunks.", name, len(chunks))
 
+            if not chunks:
+                raise RuntimeError("Parsing produced no searchable chunks.")
+
             chunk_texts = []
             for chunk in chunks:
                 path_prefix = (
@@ -84,21 +87,26 @@ class IngestionWorker:
                 )
                 chunk_texts.append(path_prefix + chunk.content)
 
-            embeddings: list[list[float]]
-            try:
-                embeddings = self._get_embedder().embed_batch(chunk_texts)
-            except RuntimeError as exc:
-                if "GEMINI_API_KEY" in str(exc):
-                    logger.warning("[%s] Embedding skipped (no API key); indexing chunks without vectors.", name)
-                    embeddings = [[] for _ in chunks]
-                else:
-                    raise
+            await document_service.update_status(doc_id, "embedding")
+            logger.info("[%s] Generating embeddings for %s chunks.", name, len(chunk_texts))
+
+            embeddings = await self._get_embedder().embed_batch_async(chunk_texts)
+            if len(embeddings) != len(chunks):
+                raise RuntimeError(
+                    f"Embedding count mismatch: {len(embeddings)} vectors for {len(chunks)} chunks."
+                )
+            if any(not vector for vector in embeddings):
+                raise RuntimeError("One or more embeddings were empty; refusing to mark document ready.")
+
             await document_service.replace_chunks(doc_id, chunks, embeddings)
             await document_service.update_status(doc_id, "ready")
-            logger.info("[%s] Ingestion complete.", name)
+            logger.info("[%s] Ingestion complete (%s chunks persisted).", name, len(chunks))
         except Exception as exc:
             logger.exception("[%s] Ingestion failed: %s", name, exc)
             await document_service.update_status(doc_id, "failed", str(exc))
+            # Clear embedder cache if API key / client init failed so a later key fix can retry.
+            if "GEMINI_API_KEY" in str(exc) or "GOOGLE_API_KEY" in str(exc):
+                self._embedder = None
 
 
 ingestion_worker = IngestionWorker()

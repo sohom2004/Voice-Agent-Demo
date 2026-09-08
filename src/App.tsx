@@ -67,7 +67,7 @@ export default function App() {
   // Poll documents if any are processing
   useEffect(() => {
     const hasUnfinished = documents.some(
-      doc => doc.status === 'uploaded' || doc.status === 'processing'
+      doc => doc.status === 'uploaded' || doc.status === 'processing' || doc.status === 'embedding'
     );
     if (!hasUnfinished) return;
 

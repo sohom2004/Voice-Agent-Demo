@@ -44,3 +44,27 @@ async def delete_document(doc_id: str):
 async def reset_samples(payload: dict):
     workspace_id = payload.get("workspaceId", "default_workspace")
     return await document_service.reset_samples(workspace_id)
+
+
+@router.post("/search")
+async def search_documents(payload: dict):
+    """MVP document retrieval endpoint used by tests and the voice agent tool path."""
+    query = (payload.get("query") or "").strip()
+    if not query:
+        raise HTTPException(status_code=400, detail="query is required")
+
+    workspace_id = payload.get("workspaceId") or payload.get("workspace_id") or "default_workspace"
+    document_ids = payload.get("documentIds") or payload.get("document_ids")
+    top_k = int(payload.get("topK") or payload.get("top_k") or 5)
+
+    try:
+        results = await document_service.search_documents(
+            workspace_id,
+            query,
+            document_ids,
+            top_k,
+        )
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+
+    return {"results": results, "count": len(results)}

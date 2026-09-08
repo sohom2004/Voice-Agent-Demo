@@ -39,15 +39,20 @@ export class LiveKitClient {
     return this.status;
   }
 
-  public async start(_voiceName?: string, _documents: DocumentFile[] = []): Promise<void> {
+  public async start(voiceName?: string, documents: DocumentFile[] = []): Promise<void> {
     this.stop();
     this.setStatus('connecting');
 
     try {
+      const documentIds = documents.filter((d) => d.enabled).map((d) => d.id);
       const tokenRes = await fetch('/api/livekit/token', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({}),
+        body: JSON.stringify({
+          workspaceId: 'default_workspace',
+          documentIds,
+          voiceName: voiceName && voiceName !== 'browser' ? voiceName : 'Kore',
+        }),
       });
 
       if (!tokenRes.ok) {
@@ -55,7 +60,7 @@ export class LiveKitClient {
         throw new Error(err.detail || 'Failed to get LiveKit token');
       }
 
-      const { token, url, roomName } = await tokenRes.json();
+      const { token, url } = await tokenRes.json();
       const room = new Room({
         adaptiveStream: true,
         dynacast: true,

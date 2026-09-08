@@ -20,7 +20,7 @@ export interface DocumentFile {
   summary?: string;
   suggestedQuestions?: string[];
   enabled: boolean;
-  status?: 'uploaded' | 'processing' | 'ready' | 'failed';
+  status?: 'uploaded' | 'processing' | 'embedding' | 'ready' | 'failed';
   error?: string;
 }
 
