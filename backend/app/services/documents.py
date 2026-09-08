@@ -171,16 +171,19 @@ class DocumentService:
         return dict(row) if row else None
 
     async def get_unprocessed_documents(self) -> list[dict[str, Any]]:
+        pending = ("uploaded", "processing", "embedding")
         if self.use_sqlite:
             conn = self._sqlite_conn()
             rows = conn.execute(
-                "SELECT * FROM documents WHERE status IN ('uploaded', 'processing') ORDER BY uploaded_at ASC"
+                "SELECT * FROM documents WHERE status IN (?, ?, ?) ORDER BY uploaded_at ASC",
+                pending,
             ).fetchall()
             conn.close()
             return [dict(row) for row in rows]
         assert self.pool is not None
         rows = await self.pool.fetch(
-            "SELECT * FROM documents WHERE status IN ('uploaded', 'processing') ORDER BY uploaded_at ASC"
+            "SELECT * FROM documents WHERE status = ANY($1::varchar[]) ORDER BY uploaded_at ASC",
+            list(pending),
         )
         return [dict(row) for row in rows]
 
@@ -342,48 +345,102 @@ class DocumentService:
             return 0.0
         return dot / (norm_a * norm_b)
 
+    def _parse_embedding(self, embedding_raw: Any) -> list[float]:
+        if embedding_raw is None:
+            return []
+        if isinstance(embedding_raw, str):
+            parsed = json.loads(embedding_raw)
+            return list(parsed) if parsed else []
+        return list(embedding_raw)
+
+    def _parse_metadata(self, metadata_raw: Any) -> dict[str, Any]:
+        if metadata_raw is None:
+            return {}
+        if isinstance(metadata_raw, str):
+            try:
+                return json.loads(metadata_raw) if metadata_raw else {}
+            except json.JSONDecodeError:
+                return {}
+        if isinstance(metadata_raw, dict):
+            return metadata_raw
+        return {}
+
+    async def search_documents(
+        self,
+        workspace_id: str,
+        query: str,
+        document_ids: list[str] | None = None,
+        top_k: int = 5,
+    ) -> list[dict[str, Any]]:
+        """Return ranked document chunks for RAG tool calling."""
+        from .ingestion.embeddings import EmbeddingProvider
+
+        rows = await self._fetch_chunks(workspace_id, document_ids)
+        if not rows:
+            return []
+
+        embedder = EmbeddingProvider()
+        query_embedding = (await embedder.embed_batch_async([query]))[0]
+        if not query_embedding:
+            raise RuntimeError("Failed to embed search query.")
+
+        scored: list[tuple[float, dict[str, Any]]] = []
+        for row in rows:
+            embedding = self._parse_embedding(row.get("embedding"))
+            if not embedding:
+                continue
+            score = self._cosine_similarity(query_embedding, embedding)
+            scored.append((score, row))
+
+        scored.sort(key=lambda item: item[0], reverse=True)
+        results: list[dict[str, Any]] = []
+        for score, row in scored[: max(1, top_k)]:
+            metadata = self._parse_metadata(row.get("metadata"))
+            results.append(
+                {
+                    "document_id": row.get("document_id"),
+                    "document_name": row.get("document_name"),
+                    "page": metadata.get("page"),
+                    "chunk_id": row.get("id"),
+                    "chunk_index": row.get("chunk_index"),
+                    "content": row.get("content"),
+                    "score": round(float(score), 4),
+                    "metadata": metadata,
+                }
+            )
+        return results
+
     async def retrieve_context(
         self, workspace_id: str, query: str, document_ids: list[str] | None = None, limit: int = 5
     ) -> str:
-        rows = await self._fetch_chunks(workspace_id, document_ids)
-        if not rows:
+        results = await self.search_documents(workspace_id, query, document_ids, limit)
+        if not results:
             return ""
-
-        try:
-            from .ingestion.embeddings import EmbeddingProvider
-
-            query_embedding = EmbeddingProvider().embed_batch([query])[0]
-            scored = []
-            for row in rows:
-                embedding_raw = row.get("embedding")
-                if not embedding_raw:
-                    continue
-                if isinstance(embedding_raw, str):
-                    embedding = json.loads(embedding_raw)
-                else:
-                    embedding = list(embedding_raw)
-                scored.append((self._cosine_similarity(query_embedding, embedding), row))
-            if scored:
-                scored.sort(key=lambda item: item[0], reverse=True)
-                top_rows = [row for _, row in scored[:limit]]
-                parts = [f"[{row['document_name']}]\n{row['content']}" for row in top_rows]
-                return "\n\n".join(parts)
-        except Exception:
-            pass
-
-        parts = [f"[{row['document_name']}]\n{row['content']}" for row in rows[:limit]]
+        parts = []
+        for item in results:
+            page = item.get("page")
+            page_label = f" page {page}" if page is not None else ""
+            parts.append(f"[{item['document_name']}{page_label}]\n{item['content']}")
         return "\n\n".join(parts)
 
     async def _fetch_chunks(
         self, workspace_id: str, document_ids: list[str] | None = None
     ) -> list[dict[str, Any]]:
+        columns = (
+            "id, workspace_id, document_id, document_name, section_path, "
+            "chunk_index, content, metadata, embedding"
+        )
+        # None => whole workspace; [] => no documents selected (return nothing).
+        if document_ids is not None and len(document_ids) == 0:
+            return []
+
         if self.use_sqlite:
             conn = self._sqlite_conn()
-            if document_ids:
+            if document_ids is not None:
                 placeholders = ",".join("?" for _ in document_ids)
                 rows = conn.execute(
                     f"""
-                    SELECT content, document_name, embedding
+                    SELECT {columns}
                     FROM document_chunks
                     WHERE workspace_id = ? AND document_id IN ({placeholders})
                     ORDER BY chunk_index ASC
@@ -392,8 +449,8 @@ class DocumentService:
                 ).fetchall()
             else:
                 rows = conn.execute(
-                    """
-                    SELECT content, document_name, embedding
+                    f"""
+                    SELECT {columns}
                     FROM document_chunks
                     WHERE workspace_id = ?
                     ORDER BY chunk_index ASC
@@ -404,10 +461,10 @@ class DocumentService:
             return [dict(row) for row in rows]
 
         assert self.pool is not None
-        if document_ids:
+        if document_ids is not None:
             rows = await self.pool.fetch(
-                """
-                SELECT content, document_name, embedding
+                f"""
+                SELECT {columns}
                 FROM document_chunks
                 WHERE workspace_id = $1 AND document_id = ANY($2::varchar[])
                 ORDER BY chunk_index ASC
@@ -417,8 +474,8 @@ class DocumentService:
             )
         else:
             rows = await self.pool.fetch(
-                """
-                SELECT content, document_name, embedding
+                f"""
+                SELECT {columns}
                 FROM document_chunks
                 WHERE workspace_id = $1
                 ORDER BY chunk_index ASC

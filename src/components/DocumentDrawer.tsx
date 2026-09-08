@@ -201,7 +201,7 @@ export const DocumentDrawer: React.FC<DocumentDrawerProps> = ({
             ) : (
               <div className="space-y-3">
                 {documents.map((doc) => {
-                  const isProcessing = doc.status === 'uploaded' || doc.status === 'processing';
+                  const isProcessing = doc.status === 'uploaded' || doc.status === 'processing' || doc.status === 'embedding';
                   const isFailed = doc.status === 'failed';
                   const isReady = doc.status === 'ready' || !doc.status;
 

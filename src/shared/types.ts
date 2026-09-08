@@ -1,4 +1,4 @@
-export type DocumentStatus = 'uploaded' | 'processing' | 'ready' | 'failed';
+export type DocumentStatus = 'uploaded' | 'processing' | 'embedding' | 'ready' | 'failed';
 
 export interface DocumentRecord {
   id: string;

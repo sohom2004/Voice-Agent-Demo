@@ -2,17 +2,26 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass
+from pathlib import Path
+
+from dotenv import load_dotenv
+
+# Load repo-root .env for FastAPI, ingestion worker, and shared settings.
+_ROOT = Path(__file__).resolve().parents[2]
+load_dotenv(_ROOT / ".env")
+load_dotenv()
 
 
 @dataclass
 class Settings:
-    gemini_api_key: str = os.getenv("GEMINI_API_KEY", "")
+    gemini_api_key: str = os.getenv("GEMINI_API_KEY", "") or os.getenv("GOOGLE_API_KEY", "")
+    google_api_key: str = os.getenv("GOOGLE_API_KEY", "") or os.getenv("GEMINI_API_KEY", "")
     pg_host: str = os.getenv("PGHOST", "localhost")
     pg_port: int = int(os.getenv("PGPORT", "5432"))
     pg_user: str = os.getenv("PGUSER", "postgres")
     pg_password: str = os.getenv("PGPASSWORD", "")
     pg_database: str = os.getenv("PGDATABASE", "postgres")
-    upload_dir: str = os.getenv("UPLOAD_DIR", "uploads")
+    upload_dir: str = os.getenv("UPLOAD_DIR", str(_ROOT / "uploads"))
     livekit_url: str = os.getenv("LIVEKIT_URL", "")
     livekit_api_key: str = os.getenv("LIVEKIT_API_KEY", "")
     livekit_api_secret: str = os.getenv("LIVEKIT_API_SECRET", "")
@@ -21,7 +30,8 @@ class Settings:
     sql_mcp_port: int = int(os.getenv("SQL_MCP_PORT", "5432"))
     sql_mcp_user: str = os.getenv("SQL_MCP_USER", "postgres")
     sql_mcp_password: str = os.getenv("SQL_MCP_PASSWORD", "postgres")
-    sql_mcp_database: str = os.getenv("SQL_MCP_DATABASE", "demo_database.db")
+    sql_mcp_database: str = os.getenv("SQL_MCP_DATABASE", str(_ROOT / "demo_database.db"))
+    app_url: str = os.getenv("APP_URL", "http://localhost:3000")
 
 
 settings = Settings()

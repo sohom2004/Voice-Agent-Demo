@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-import math
-import os
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -72,15 +70,21 @@ def _parse_pdf(buffer: bytes, file_name: str) -> CanonicalDocument:
     from io import BytesIO
 
     reader = PdfReader(BytesIO(buffer))
-    text_parts = []
-    for page in reader.pages:
-        text_parts.append(page.extract_text() or "")
-    text = "\n".join(text_parts)
-    paragraphs = [p.strip() for p in re.split(r"\n\s*\n", text) if p.strip()]
-    sections = [
-        DocumentSection(id=f"pdf_{idx}", type="paragraph", content=para, source={"page": 1})
-        for idx, para in enumerate(paragraphs)
-    ]
+    sections: list[DocumentSection] = []
+    for page_number, page in enumerate(reader.pages, start=1):
+        page_text = page.extract_text() or ""
+        paragraphs = [p.strip() for p in re.split(r"\n\s*\n", page_text) if p.strip()]
+        if not paragraphs and page_text.strip():
+            paragraphs = [page_text.strip()]
+        for para_idx, para in enumerate(paragraphs):
+            sections.append(
+                DocumentSection(
+                    id=f"pdf_p{page_number}_{para_idx}",
+                    type="paragraph",
+                    content=para,
+                    source={"page": page_number},
+                )
+            )
     return CanonicalDocument("", "", file_name, "pdf", sections, {"numPages": len(reader.pages)})
 
 
