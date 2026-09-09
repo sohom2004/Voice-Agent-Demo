@@ -37,9 +37,14 @@ for pkg_root in (SQL_MCP_ROOT, DOC_RETRIEVAL_ROOT):
     if str(pkg_root) not in sys.path:
         sys.path.insert(0, str(pkg_root))
 
+from sql_mcp.agent_prompt import build_system_prompt  # noqa: E402
 from sql_mcp.engine import SqlMcpEngine  # noqa: E402
 from sql_mcp.manifest import describe_manifest_for_prompt, to_raw_schema  # noqa: E402
 from sql_mcp.models import ConnectionConfig  # noqa: E402
+from sql_mcp.ticket_workflow import (  # noqa: E402
+    TICKET_TOOL_DEFINITIONS,
+    dispatch_ticket_tool,
+)
 
 from doc_retrieval import DocRetrievalEngine, RetrievalConfig  # noqa: E402
 
@@ -109,6 +114,28 @@ async def run_custom_read_query(sql: str) -> str:
     return json.dumps(engine.execute_read(sql), default=str)
 
 
+def _make_ticket_tool(tool_def: dict[str, Any]):
+    tool_name = tool_def["name"]
+
+    async def _handler(raw_arguments: dict[str, Any]) -> str:
+        result = dispatch_ticket_tool(_db_path, tool_name, raw_arguments or {})
+        return json.dumps(result, default=str)
+
+    _handler.__name__ = tool_name
+    return function_tool(
+        _handler,
+        raw_schema={
+            "name": tool_def["name"],
+            "description": tool_def["description"],
+            "parameters": tool_def["parameters"],
+        },
+    )
+
+
+TICKET_TOOLS = [_make_ticket_tool(t) for t in TICKET_TOOL_DEFINITIONS]
+logger.info("Registered ticket workflow tools: %s", ", ".join(t["name"] for t in TICKET_TOOL_DEFINITIONS))
+
+
 # ---------------------------------------------------------------------------
 # Documents: dedicated retrieval tool (independent of sql-mcp).
 # ---------------------------------------------------------------------------
@@ -133,11 +160,9 @@ doc_engine = DocRetrievalEngine(
 
 @function_tool
 async def search_documents(query: str) -> str:
-    """Search the user's uploaded documents/files (reports, notes, policies,
-    anything they've uploaded) for information relevant to their question.
-    Use this ONLY for questions about uploaded documents — never for
-    questions about live database records like people, orders, or other
-    structured data, which have their own dedicated tools."""
+    """Search uploaded operational documents and billing policies for process
+    guidance. Use ONLY for policy/procedure questions — never for live
+    customer, claim, invoice, payment, or ticket record lookups."""
     # Fresh lookup each tool call so recent uploads are visible without waiting
     # out the short in-memory cache TTL.
     doc_engine.invalidate()
@@ -149,39 +174,7 @@ async def search_documents(query: str) -> str:
     return doc_engine.format_context(results)
 
 
-INSTRUCTIONS = f"""You are Natasha, a warm, multilingual voice assistant.
-
-You have two independent, ready-to-use capabilities. Decide which ONE fits
-the user's question and call exactly that tool — do not explore, do not ask
-the user for table names, SQL, or file names, and do not narrate which tool
-you're using.
-
-1. DATABASE — for questions about live structured records (people, orders,
-   results, anything row-and-column shaped). The connected database has
-   these tables and columns, so you already know the shape of the data —
-   never call a tool just to discover schema, you already have it below:
-{_DB_SCHEMA_SUMMARY}
-   Use the specific get_/list_/count_/create_/update_/delete_ tool for the
-   right table. Only fall back to run_custom_read_query for read-only
-   analytics a specific tool genuinely can't express. Writes (create/update/
-   delete) require the user's explicit spoken confirmation before you pass
-   confirmed=true.
-
-2. DOCUMENTS — for questions about uploaded files, reports, or notes. Call
-   search_documents with the user's question as the query.
-
-If a question could plausibly touch both, pick whichever the user's wording
-is more clearly about and answer decisively; ask a brief clarifying question
-only if it is genuinely ambiguous.
-
-Speak naturally for voice — no markdown, bullet points, or raw JSON/SQL in
-your replies. Greet the user warmly on their first turn.
-
-# INTERRUPTIONS
-- If the user starts speaking while you are talking, stop immediately and listen.
-- Never talk over the user. Resume only after they finish.
-"""
-
+INSTRUCTIONS = build_system_prompt(_DB_SCHEMA_SUMMARY)
 
 server = AgentServer()
 
@@ -224,7 +217,7 @@ async def entrypoint(ctx: JobContext):
 
     agent = Agent(
         instructions=INSTRUCTIONS,
-        tools=[*DB_FAST_PATH_TOOLS, run_custom_read_query, search_documents],
+        tools=[*DB_FAST_PATH_TOOLS, run_custom_read_query, *TICKET_TOOLS, search_documents],
     )
 
     await session.start(agent=agent, room=ctx.room)

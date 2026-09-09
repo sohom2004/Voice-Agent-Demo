@@ -121,7 +121,7 @@ export const Header: React.FC<HeaderProps> = ({
               <div className="flex items-center gap-2">
                 <span className="text-sm font-semibold tracking-wider text-[#E0E2E6]">NATASHA</span>
                 <span className="text-[9px] px-1.5 py-0.5 rounded font-mono uppercase bg-white/5 text-emerald-400/90 border border-white/10 tracking-widest">
-                  Live Duplex v4.0
+                  Billing BPO
                 </span>
               </div>
               <div className="hidden sm:block">

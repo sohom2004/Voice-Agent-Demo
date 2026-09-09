@@ -19,7 +19,7 @@ import {
 import { LiveKitClient } from './utils/liveKitClient';
 import { LayoutDashboard, MessageSquare, Database, Terminal, Shield } from 'lucide-react';
 
-const INITIAL_GREETING = "Hi there! I'm Natasha. I'm connected via LiveKit with sql-mcp database access. Ask me about your data or uploaded documents!";
+const INITIAL_GREETING = "Hi, I'm Natasha with medical billing support. I can help with claims, invoices, payments, and support tickets.";
 
 export default function App() {
   // Main View Switcher: 'dashboard' (Live DB Context & Logs) or 'chat' (Transcript)
@@ -33,9 +33,9 @@ export default function App() {
       content: INITIAL_GREETING,
       timestamp: Date.now(),
       suggestedQuestions: [
-        'What tables and columns exist in my database?',
-        'Can you count how many records are in the database?',
-        'Show me the recent orders in the system.'
+        'Why was claim CLM10002 denied?',
+        'What is the status of ticket TKT10001?',
+        'What is the policy for appealing a denied claim?'
       ]
     }
   ]);
@@ -362,9 +362,9 @@ export default function App() {
         content: INITIAL_GREETING,
         timestamp: Date.now(),
         suggestedQuestions: [
-          'What tables and columns exist in my database?',
-          'Can you count how many records are in the database?',
-          'Show me the recent orders in the system.'
+          'Why was claim CLM10002 denied?',
+          'What is the status of ticket TKT10001?',
+          'What is the policy for appealing a denied claim?'
         ]
       }
     ]);

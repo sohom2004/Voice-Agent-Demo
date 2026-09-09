@@ -1,6 +1,6 @@
 {
-  "name": "Natasha - Conversational Voice Agent",
-  "description": "Voice-first intelligent companion and document analyst with real-time speech dialogue and document grounding.",
+  "name": "Natasha - Medical Billing BPO Voice Agent",
+  "description": "Professional medical billing BPO customer-service voice agent demo with LiveKit, Gemini Live, sql-mcp, and document grounding.",
   "requestFramePermissions": [
     "microphone"
   ],

@@ -342,58 +342,55 @@ export const VoiceOrb: React.FC<VoiceOrbProps> = ({
           {activeDocNames.length > 0 ? (
             <>
               <button
-                onClick={() => onQuickPrompt("Summarize what is in my active documents.")}
+                onClick={() => onQuickPrompt("What is the policy for appealing a denied claim?")}
                 className="text-xs bg-white/5 hover:bg-white/10 text-[#E0E2E6] px-3.5 py-2 rounded-xl border border-white/10 hover:border-emerald-400/30 transition-all text-left flex items-center gap-2 backdrop-blur-sm shadow-sm"
               >
-                <span>"Summarize my active documents"</span>
+                <span>"Appeal policy for denied claims?"</span>
                 <ArrowRight className="w-3 h-3 text-emerald-400 opacity-60" />
               </button>
               <button
-                onClick={() => onQuickPrompt("What are the key technical specifications mentioned in the files?")}
+                onClick={() => onQuickPrompt("When should a billing issue be escalated?")}
                 className="text-xs bg-white/5 hover:bg-white/10 text-[#E0E2E6] px-3.5 py-2 rounded-xl border border-white/10 hover:border-emerald-400/30 transition-all text-left flex items-center gap-2 backdrop-blur-sm shadow-sm"
               >
-                <span>"What are key specs in the files?"</span>
+                <span>"When should a billing issue be escalated?"</span>
                 <ArrowRight className="w-3 h-3 text-emerald-400 opacity-60" />
               </button>
               <button
-                onClick={() => onQuickPrompt("Are there any limitations or prerequisites noted in the docs?")}
+                onClick={() => onQuickPrompt("How are payment failures handled?")}
                 className="text-xs bg-white/5 hover:bg-white/10 text-[#E0E2E6] px-3.5 py-2 rounded-xl border border-white/10 hover:border-emerald-400/30 transition-all text-left flex items-center gap-2 backdrop-blur-sm shadow-sm"
               >
-                <span>"Any limitations noted in the docs?"</span>
+                <span>"How are payment failures handled?"</span>
                 <ArrowRight className="w-3 h-3 text-emerald-400 opacity-60" />
               </button>
             </>
           ) : (
             <>
               <button
-                onClick={() => onQuickPrompt("Hi Natasha, what can you help me with today?")}
+                onClick={() => onQuickPrompt("Why was claim CLM10002 denied?")}
                 className="text-xs bg-white/5 hover:bg-white/10 text-[#E0E2E6] px-3.5 py-2 rounded-xl border border-white/10 hover:border-emerald-400/30 transition-all text-left flex items-center gap-2 backdrop-blur-sm shadow-sm"
               >
-                <span>"What can you help me with?"</span>
+                <span>"Why was claim CLM10002 denied?"</span>
                 <ArrowRight className="w-3 h-3 text-emerald-400 opacity-60" />
               </button>
               <button
-                onClick={() => onQuickPrompt("नमस्ते नताशा, आप क्या क्या कर सकती हैं?")}
+                onClick={() => onQuickPrompt("What is the status of ticket TKT10001?")}
                 className="text-xs bg-white/5 hover:bg-white/10 text-[#E0E2E6] px-3.5 py-2 rounded-xl border border-white/10 hover:border-emerald-400/30 transition-all text-left flex items-center gap-2 backdrop-blur-sm shadow-sm"
-                title="Hindi: Namaste Natasha"
               >
-                <span>"नमस्ते नताशा, आप क्या कर सकती हैं?"</span>
+                <span>"What's the status of ticket TKT10001?"</span>
                 <ArrowRight className="w-3 h-3 text-emerald-400 opacity-60" />
               </button>
               <button
-                onClick={() => onQuickPrompt("নমস্কার নাতাশা, তুমি কেমন আছো?")}
+                onClick={() => onQuickPrompt("What is the policy for appealing a denied claim?")}
                 className="text-xs bg-white/5 hover:bg-white/10 text-[#E0E2E6] px-3.5 py-2 rounded-xl border border-white/10 hover:border-emerald-400/30 transition-all text-left flex items-center gap-2 backdrop-blur-sm shadow-sm"
-                title="Bengali: Nomoshkar Natasha"
               >
-                <span>"নমস্কার নাতাশা, কেমন আছো?"</span>
+                <span>"Appeal policy for denied claims?"</span>
                 <ArrowRight className="w-3 h-3 text-emerald-400 opacity-60" />
               </button>
               <button
-                onClick={() => onQuickPrompt("Hola Natasha, ¿cómo puedes ayudarme hoy?")}
+                onClick={() => onQuickPrompt("What is my outstanding balance for account BA10001?")}
                 className="text-xs bg-white/5 hover:bg-white/10 text-[#E0E2E6] px-3.5 py-2 rounded-xl border border-white/10 hover:border-emerald-400/30 transition-all text-left flex items-center gap-2 backdrop-blur-sm shadow-sm"
-                title="Spanish: Hola Natasha"
               >
-                <span>"Hola Natasha, ¿cómo estás?"</span>
+                <span>"What is my outstanding balance?"</span>
                 <ArrowRight className="w-3 h-3 text-emerald-400 opacity-60" />
               </button>
             </>
