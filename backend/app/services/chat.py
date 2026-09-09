@@ -9,11 +9,15 @@ from typing import Any
 from google import genai
 from google.genai import types
 
+from sql_mcp.agent_prompt import build_system_prompt
+from sql_mcp.ticket_workflow import TICKET_TOOL_DEFINITIONS
+
 from ..config import settings
 from .documents import document_service
 from .sql_mcp import sql_mcp_service
 
 SEARCH_DOCUMENTS = "search_documents"
+TICKET_TOOL_NAMES = {t["name"] for t in TICKET_TOOL_DEFINITIONS}
 
 def _audio_to_base64(data: Any) -> str | None:
     if data is None:
@@ -57,28 +61,7 @@ SEARCH_DOCUMENTS_TOOL = {
 
 
 def _system_prompt(schema_summary: str) -> str:
-    return f"""You are Natasha, an intelligent, warm, polyglot voice companion.
-
-You have two independent, ready-to-use capabilities. Decide which ONE fits the
-user's question and call exactly that tool — do not explore, do not ask the
-user for table names, SQL, or file names, and do not narrate which tool
-you're using.
-
-1. DATABASE — for questions about live structured records. The connected
-   database has these tables and columns, so you already know the shape of
-   the data — never call a tool just to discover schema:
-{schema_summary}
-   Use the specific get_/list_/count_/create_/update_/delete_ tool for the
-   right table. Only fall back to run_custom_read_query for read-only
-   analytics a specific tool genuinely can't express. Writes require the
-   user's explicit confirmation before you pass confirmed=true.
-
-2. DOCUMENTS — for questions about uploaded files, reports, or notes. Call
-   search_documents with the user's question as the query.
-
-Speak naturally for voice — avoid markdown, bullet points, and raw JSON.
-Never expose internal SQL or schema jargon to non-technical users.
-"""
+    return build_system_prompt(schema_summary)
 
 
 def _get_client() -> genai.Client:
@@ -111,6 +94,8 @@ async def _dispatch_tool_call(
         query = args.get("query", "")
         context = await document_service.retrieve_context(workspace_id, query, document_ids)
         return {"context": context} if context else {"context": "", "message": "No relevant documents found."}
+    if name in TICKET_TOOL_NAMES:
+        return await sql_mcp_service.call_ticket_tool(tenant_id, name, args)
     return await sql_mcp_service.call_tool(tenant_id, name, args)
 
 
@@ -189,7 +174,18 @@ async def generate_chat_response(
         contents.append(types.Content(role=role, parts=[types.Part(text=item.get("content", ""))]))
     contents.append(types.Content(role="user", parts=[types.Part(text=message)]))
 
-    tool_defs = sql_mcp_service.get_gemini_tools(tenant_id) + [SEARCH_DOCUMENTS_TOOL]
+    tool_defs = (
+        sql_mcp_service.get_gemini_tools(tenant_id)
+        + [
+            {
+                "name": t["name"],
+                "description": t["description"],
+                "parameters": t["parameters"],
+            }
+            for t in TICKET_TOOL_DEFINITIONS
+        ]
+        + [SEARCH_DOCUMENTS_TOOL]
+    )
     text = await _handle_tool_loop(client, contents, tenant_id, workspace_id, document_ids, tool_defs)
 
     audio_base64 = None
@@ -221,9 +217,9 @@ async def generate_chat_response(
         "text": text,
         "audioBase64": _audio_to_base64(audio_base64) if audio_base64 is not None else None,
         "suggestedQuestions": [
-            "What tables are in the database?",
-            "Show me recent patient records.",
-            "Can you summarize the uploaded documents?",
+            "Why was claim CLM10002 denied?",
+            "What is the status of ticket TKT10001?",
+            "What is the policy for appealing a denied claim?",
         ],
         "groundedDocs": [],
     }

@@ -15,10 +15,12 @@ if str(SQL_MCP_ROOT) not in sys.path:
 from sql_mcp.engine import SqlMcpEngine
 from sql_mcp.manifest import to_raw_schema
 from sql_mcp.models import ConnectionConfig
+from sql_mcp.ticket_workflow import TICKET_TOOL_DEFINITIONS, dispatch_ticket_tool
 
 from ..config import settings
 
 RUN_CUSTOM_READ_QUERY = "run_custom_read_query"
+TICKET_TOOL_NAMES = {t["name"] for t in TICKET_TOOL_DEFINITIONS}
 
 
 class SqlMcpService:
@@ -97,6 +99,14 @@ class SqlMcpService:
                 },
             }
         )
+        for ticket_tool in TICKET_TOOL_DEFINITIONS:
+            tools.append(
+                {
+                    "name": ticket_tool["name"],
+                    "description": ticket_tool["description"],
+                    "input_schema": ticket_tool["parameters"],
+                }
+            )
         return tools
 
     def get_column_context(self, tenant_id: str = "default_tenant") -> dict:
@@ -139,10 +149,15 @@ class SqlMcpService:
         self.log("TOOL_CALL", f"Tool call: {tool_name}", {"args": args})
         if tool_name == RUN_CUSTOM_READ_QUERY:
             result = engine.execute_read(args.get("sql", ""))
+        elif tool_name in TICKET_TOOL_NAMES:
+            result = dispatch_ticket_tool(engine.config.database, tool_name, args)
         else:
             result = engine.call_manifest_tool(tool_name, args)
         self.log("GUARDRAIL_CHECK", f"{tool_name} -> {result.get('status')}", result)
         return result
+
+    async def call_ticket_tool(self, tenant_id: str, tool_name: str, args: dict) -> dict:
+        return await self.call_tool(tenant_id, tool_name, args)
 
     def get_gemini_tools(self, tenant_id: str = "default_tenant") -> list[dict]:
         engine = self.get_engine(tenant_id)

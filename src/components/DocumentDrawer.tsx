@@ -109,7 +109,7 @@ export const DocumentDrawer: React.FC<DocumentDrawerProps> = ({
                 </span>
               </h2>
               <p className="text-xs opacity-50">
-                Ground Natasha's voice answers in your project files
+                Ground Natasha's answers in medical billing policy documents
               </p>
             </div>
           </div>

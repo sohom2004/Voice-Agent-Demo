@@ -2,71 +2,96 @@ import { DocumentFile } from '../types';
 
 export const SAMPLE_DOCUMENTS: DocumentFile[] = [
   {
-    id: 'sample-readme',
-    name: 'PROJECT_AURORA_README.md',
+    id: 'sample-billing-cs-policy',
+    name: 'medical_billing_customer_service_policy.md',
     type: 'markdown',
-    size: 2450,
+    size: 2100,
     uploadedAt: Date.now() - 3600000,
     enabled: true,
-    summary: 'Overview of Aurora distributed event engine including architecture, 3-tier caching, and deployment instructions.',
+    summary: 'Demo customer-service standards for medical billing BPO support calls.',
     suggestedQuestions: [
-      'What are the three tiers in Aurora caching architecture?',
-      'How do I configure the Redis replication cluster?',
-      'What is the maximum throughput supported by Aurora?'
+      'When should a support ticket be opened?',
+      'What priority should a denied claim receive?',
+      'How should agents verify a caller?',
     ],
-    content: `# Project Aurora: Next-Gen Event Processing Engine
+    content: `# Medical Billing Customer Service Policy (Demo)
 
-## Overview
-Project Aurora is a distributed, low-latency streaming pipeline designed for financial real-time telemetry and anomaly detection. It processes up to 250,000 events per second with sub-five-millisecond p99 latency.
+This document is a fictional demo policy for training and product demonstrations.
 
-## Architecture
-Aurora uses a decoupled three-tier caching pipeline:
-1. **L1 Hot Cache**: In-memory ring buffer using Lock-Free RingBuffer structures (capacity: 50,000 items, retention: 200 milliseconds).
-2. **L2 Warm Cache**: Redis 7.2 Sentinel cluster with active-active regional replication and sub-millisecond local reads.
-3. **L3 Cold Archive**: Partitioned Parquet files on Google Cloud Storage compressed via Snappy.
+## When To Open A Ticket
+Open a support ticket when a claim denial needs investigation, a payment failed, an invoice balance is disputed, or the caller requests written tracking.
 
-## Deployment & Configuration
-- **Prerequisites**: Node.js version 22 or higher, Redis cluster 7.2+, and Docker 26+.
-- **Environment Variables**:
-  - \`AURORA_PORT\`: Server listen port (default: 8080).
-  - \`AURORA_CLUSTER_MODE\`: Set to \`distributed\` for production or \`standalone\` for local development.
-  - \`AURORA_REPLICATION_FACTOR\`: Recommended minimum of 3 nodes in production.
-- **Start Command**: \`npm run start:cluster\`
-
-## Known Limitations
-Aurora does not currently support out-of-order event stitching exceeding a four-hour timestamp drift. For historic telemetry older than twenty-four hours, queries must be routed to the BigQuery Cold Pipeline.`
+## Priority Guidance
+- high: denied claims, failed payments tied to due dates
+- urgent: escalation cases or unresolved appeals past SLA`
   },
   {
-    id: 'sample-roadmap',
-    name: 'Q3_PRODUCT_STRATEGY.txt',
-    type: 'text',
-    size: 1680,
+    id: 'sample-claim-denial-policy',
+    name: 'claim_denial_and_appeal_policy.md',
+    type: 'markdown',
+    size: 2400,
     uploadedAt: Date.now() - 7200000,
     enabled: true,
-    summary: 'Executive strategic goals for Q3 covering mobile voice expansion, SOC2 Type II certification, and European data residency.',
+    summary: 'Demo policy covering denied claims, appeal requirements, and escalation triggers.',
     suggestedQuestions: [
-      'What are our top three engineering deliverables for Q3?',
-      'When is the SOC2 Type II audit scheduled?',
-      'What is the budget allocated for Frankfurt data residency?'
+      'What is the policy for appealing a denied claim?',
+      'When should a denied claim be escalated?',
+      'What information is required for an appeal?',
     ],
-    content: `Q3 PRODUCT & ENGINEERING STRATEGY MEMORANDUM
-Confidential - Internal Team Only
+    content: `# Claim Denial And Appeal Policy (Demo)
 
-Objective 1: Mobile Voice First Experience
-- Target Launch: August 15th
-- Primary focus: Sub-300ms speech response times using neural compression.
-- Key Milestone: Beta release to 5,000 pilot enterprise users across North America.
+## When To Escalate A Denied Claim
+Escalate when prior authorization evidence exists but the claim remains denied, the denial affects an overdue balance greater than $250, or the appeal window is within 10 days of expiration.
 
-Objective 2: Enterprise Security & Compliance
-- Target Date: September 30th
-- Scope: Complete SOC2 Type II audit and HIPAA compliance certification.
-- Lead auditor: Schellman & Company.
-- Action items: Implement automated audit logs, biometric session validation, and customer-managed KMS keys.
+## Information Required For An Appeal
+Collect claim number, service date, provider name, procedure code, denial reason, and supporting authorization references.`
+  },
+  {
+    id: 'sample-insurance-guidelines',
+    name: 'insurance_processing_guidelines.md',
+    type: 'markdown',
+    size: 1800,
+    uploadedAt: Date.now() - 10800000,
+    enabled: true,
+    summary: 'Demo guidelines for explaining claim lifecycle and amounts.',
+    suggestedQuestions: [
+      'How should claim amounts be explained?',
+      'What does partially paid mean?',
+    ],
+    content: `# Insurance Processing Guidelines (Demo)
 
-Objective 3: European Regional Data Residency
-- Target Launch: September 1st
-- Data Centers: Frankfurt (eu-central-1) and Dublin (eu-west-1).
-- Total Infrastructure Budget: 180,000 USD for the fiscal quarter.
-- Requirements: Zero telemetry data transfer outside EU boundaries without explicit tenant consent.`
+When discussing a claim, clearly separate billed amount, allowed amount, insurance paid, customer responsibility, claim status, and denial reason if present.`
+  },
+  {
+    id: 'sample-escalation-policy',
+    name: 'billing_escalation_policy.md',
+    type: 'markdown',
+    size: 1900,
+    uploadedAt: Date.now() - 14400000,
+    enabled: true,
+    summary: 'Demo escalation rules for billing and ticket routing.',
+    suggestedQuestions: [
+      'When should a billing issue become high priority?',
+      'When should a ticket be escalated?',
+    ],
+    content: `# Billing Escalation Policy (Demo)
+
+Escalate when a ticket remains unresolved after two contacts, an overdue invoice exceeds $400 with failed payments, or a claim appeal is urgent or stalled.`
+  },
+  {
+    id: 'sample-payment-refund-policy',
+    name: 'payment_and_refund_policy.md',
+    type: 'markdown',
+    size: 1700,
+    uploadedAt: Date.now() - 18000000,
+    enabled: true,
+    summary: 'Demo payment failure and refund handling guidance.',
+    suggestedQuestions: [
+      'How are payment failures handled?',
+      'When is a refund review appropriate?',
+    ],
+    content: `# Payment And Refund Policy (Demo)
+
+Confirm payment reference and failure status from live records. Offer to open a payment_issue ticket after confirmation. Treat failed payments on overdue invoices as high priority.`
   }
 ];

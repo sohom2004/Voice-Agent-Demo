@@ -31,3 +31,4 @@ uploads/*
 *.njsproj
 *.sln
 *.swp
+.pytest_cache/

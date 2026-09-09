@@ -22,7 +22,7 @@ async def lifespan(app: FastAPI):
     await ingestion_worker.stop()
 
 
-app = FastAPI(title="Natasha API", version="2.0.0", lifespan=lifespan)
+app = FastAPI(title="Natasha Medical Billing BPO API", version="4.0.0", lifespan=lifespan)
 
 app.add_middleware(
     CORSMiddleware,

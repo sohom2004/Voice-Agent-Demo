@@ -8,6 +8,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from .demo_billing import ensure_demo_database
 from .manifest import ToolDefinition, ToolManifest
 from .manifest import compile_manifest as _compile_manifest
 from .models import ColumnMeta, ConnectionConfig, SchemaSnapshot, TableMeta
@@ -35,10 +36,18 @@ class SqlMcpEngine:
         if config.dialect == "sqlite":
             self._ensure_demo_sqlite()
 
+    def _ensure_demo_sqlite(self) -> None:
+        if self.config.dialect != "sqlite":
+            return
+        # Auto-create the medical-billing BPO demo DB when missing.
+        # Developers can also rebuild via: python3 scripts/init_demo_database.py
+        ensure_demo_database(self.config.database)
+
     def _connect_sqlite(self) -> sqlite3.Connection:
         db_path = Path(self.config.database)
         conn = sqlite3.connect(str(db_path))
         conn.row_factory = sqlite3.Row
+        conn.execute("PRAGMA foreign_keys = ON")
         return conn
 
     def _connect_postgres(self):
@@ -60,57 +69,6 @@ class SqlMcpEngine:
         if self.config.dialect == "postgres":
             return self._connect_postgres()
         raise ValueError(f"Unsupported dialect: {self.config.dialect}")
-
-    def _ensure_demo_sqlite(self) -> None:
-        if self.config.dialect != "sqlite":
-            return
-        db_path = Path(self.config.database)
-        if db_path.exists():
-            return
-        conn = sqlite3.connect(str(db_path))
-        cur = conn.cursor()
-        cur.execute(
-            """
-            CREATE TABLE IF NOT EXISTS patients (
-              patient_id TEXT PRIMARY KEY,
-              name TEXT NOT NULL,
-              age INTEGER,
-              gender TEXT,
-              diagnosis TEXT
-            )
-            """
-        )
-        cur.execute(
-            """
-            CREATE TABLE IF NOT EXISTS lab_results (
-              id INTEGER PRIMARY KEY AUTOINCREMENT,
-              patient_id TEXT REFERENCES patients(patient_id),
-              test_name TEXT,
-              result_value REAL,
-              unit TEXT,
-              test_date TEXT
-            )
-            """
-        )
-        cur.executemany(
-            "INSERT OR IGNORE INTO patients VALUES (?, ?, ?, ?, ?)",
-            [
-                ("P101", "Alice Smith", 34, "Female", "Hypertension"),
-                ("P102", "Bob Jones", 58, "Male", "Type 2 Diabetes"),
-                ("P103", "Charlie Brown", 45, "Male", "Hyperlipidemia"),
-            ],
-        )
-        cur.executemany(
-            "INSERT INTO lab_results (patient_id, test_name, result_value, unit, test_date) VALUES (?, ?, ?, ?, ?)",
-            [
-                ("P101", "Blood Pressure Systolic", 138.0, "mmHg", "2026-08-15"),
-                ("P101", "Cholesterol Total", 210.0, "mg/dL", "2026-08-15"),
-                ("P102", "HbA1c", 7.8, "%", "2026-08-20"),
-                ("P102", "Fasting Glucose", 145.0, "mg/dL", "2026-08-20"),
-            ],
-        )
-        conn.commit()
-        conn.close()
 
     def _rows_to_dicts(self, rows: list[Any]) -> list[dict[str, Any]]:
         if not rows:

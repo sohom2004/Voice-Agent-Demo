@@ -12,26 +12,21 @@ import asyncpg
 
 from ..config import settings
 
-SAMPLE_DOCUMENTS = [
-    {
-        "name": "PROJECT_AURORA_README.md",
-        "type": "markdown",
-        "content": """# Project Aurora: Next-Gen Event Processing Engine
+def _load_demo_docs() -> list[dict[str, str]]:
+    docs_dir = Path(__file__).resolve().parents[3] / "demo-docs"
+    docs: list[dict[str, str]] = []
+    for path in sorted(docs_dir.glob("*.md")):
+        docs.append(
+            {
+                "name": path.name,
+                "type": "markdown",
+                "content": path.read_text(encoding="utf-8"),
+            }
+        )
+    return docs
 
-Project Aurora is a distributed streaming pipeline for real-time telemetry.
-It processes up to 250,000 events per second with sub-five-millisecond p99 latency.
-""",
-    },
-    {
-        "name": "Q3_PRODUCT_STRATEGY.txt",
-        "type": "text",
-        "content": """Q3 Product Strategy
-- Expand mobile voice experiences
-- Complete SOC2 Type II certification
-- Launch European data residency in Frankfurt
-""",
-    },
-]
+
+SAMPLE_DOCUMENTS = _load_demo_docs()
 
 
 class DocumentService:
