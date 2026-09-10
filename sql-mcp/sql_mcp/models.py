@@ -117,27 +117,44 @@ def _normalize_dialect(value: Any) -> Dialect:
     raise ValueError(f"Unsupported dialect: {value}")
 
 
+def _normalize_sqlite_path(path: str) -> str:
+    """Normalize sqlite URL paths for Windows + relative forms."""
+    raw = (path or "").replace("\\", "/").strip()
+    if not raw:
+        return raw
+
+    # urlparse turns sqlite:///D:/foo.db into "/D:/foo.db"
+    if len(raw) >= 3 and raw[0] == "/" and raw[1].isalpha() and raw[2] == ":":
+        raw = raw[1:]
+
+    # sqlite:////D:/foo or ////C:/foo
+    while raw.startswith("//"):
+        raw = raw[1:]
+
+    # sqlite:///./demo.db -> ./demo.db ; sqlite:///demo.db -> demo.db
+    if raw.startswith("/./"):
+        raw = raw[1:]
+    elif raw.count("/") == 1 and raw.startswith("/") and not raw.startswith("//"):
+        # "/demo.db" means relative demo.db (not filesystem root)
+        raw = raw.lstrip("/")
+
+    return raw
+
+
 def _parse_connection_url(url: str) -> dict[str, Any]:
     raw = (url or "").strip()
     if not raw:
         raise ValueError("connectionUrl is empty")
 
-    # sqlite:///relative/path.db  or  sqlite:////absolute/path.db
+    # sqlite:///relative/path.db  or  sqlite:///D:/abs/path.db  or  sqlite:////abs/unix/path.db
     if raw.startswith("sqlite:"):
-        # urlparse treats sqlite:///foo as path /foo
-        parsed = urlparse(raw)
-        path = unquote(parsed.path or "")
-        if raw.startswith("sqlite:////"):
-            # sqlite:////abs/path -> path becomes //abs/path; normalize
-            path = "/" + path.lstrip("/")
-        elif path.startswith("/") and not raw.startswith("sqlite:////"):
-            # sqlite:///rel.db -> /rel.db means relative rel.db for our purposes
-            # unless it looks like an absolute filesystem path with more segments
-            # Keep leading slash only for absolute-looking multi-segment paths on Unix
-            # when users pass sqlite:////abs. Prefer stripping single leading slash
-            # for sqlite:///demo_database.db (common relative form).
-            if path.count("/") == 1:
-                path = path.lstrip("/")
+        # Allow Windows paths with backslashes in the URL body.
+        normalized = raw.replace("\\", "/")
+        parsed = urlparse(normalized)
+        path = _normalize_sqlite_path(unquote(parsed.path or ""))
+        # netloc can hold drive-less hosts; for sqlite file URLs path is primary.
+        if not path and parsed.netloc:
+            path = _normalize_sqlite_path(unquote(parsed.netloc))
         if not path:
             raise ValueError("SQLite connection URL must include a database path")
         return {"dialect": "sqlite", "database": path, "host": "", "port": 0, "user": "", "password": ""}

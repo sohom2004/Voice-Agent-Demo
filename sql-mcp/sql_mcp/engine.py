@@ -55,10 +55,41 @@ class SqlMcpEngine:
         # arbitrary user sqlite files.
         if not self.config.is_demo_sqlite():
             return
-        ensure_demo_database(self.config.database)
+        resolved = self._resolve_sqlite_path()
+        self.config.database = str(resolved)
+        ensure_demo_database(resolved)
+
+    def _resolve_sqlite_path(self) -> Path:
+        """Resolve sqlite paths relative to cwd or the monorepo root.
+
+        Uvicorn runs with cwd=backend/, so bare filenames like
+        ``test_connector_database.db`` must also be looked up in the repo root.
+        """
+        raw = Path(self.config.database)
+        if raw.is_absolute():
+            return raw
+
+        cwd_candidate = (Path.cwd() / raw).resolve()
+        if cwd_candidate.exists():
+            return cwd_candidate
+
+        # sql_mcp/engine.py -> sql_mcp -> sql-mcp -> repo root
+        repo_root = Path(__file__).resolve().parents[2]
+        root_candidate = (repo_root / raw).resolve()
+        if root_candidate.exists():
+            return root_candidate
+
+        # Prefer repo-root target for newly created files when cwd is backend/
+        if Path.cwd().name.lower() == "backend" and (Path.cwd().parent / raw).parent.exists():
+            return (Path.cwd().parent / raw).resolve()
+        return cwd_candidate
 
     def _connect_sqlite(self) -> sqlite3.Connection:
-        db_path = Path(self.config.database)
+        db_path = self._resolve_sqlite_path()
+        # Persist the resolved path so logs / status show a usable file location.
+        self.config.database = str(db_path)
+        if not db_path.exists():
+            raise FileNotFoundError(f"SQLite database file not found: {db_path}")
         conn = sqlite3.connect(str(db_path), check_same_thread=False)
         conn.row_factory = sqlite3.Row
         conn.execute("PRAGMA foreign_keys = ON")
