@@ -44,8 +44,8 @@ export const VoiceInputBar: React.FC<VoiceInputBarProps> = ({
           <Paperclip className="w-4 h-4" />
         </button>
 
-        {/* Status strip (replaces text composer) */}
-        <div className="flex-1 min-w-0 px-4 py-3 rounded-2xl bg-white/5 border border-white/10 text-sm text-slate-400 truncate">
+        {/* Voice status label — not a text composer */}
+        <div className="flex-1 min-w-0 px-2 py-2 text-xs sm:text-sm text-slate-400 tracking-wide truncate">
           {statusLabel}
         </div>
 
