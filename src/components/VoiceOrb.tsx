@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { Mic, MicOff, Square, Sparkles, ArrowRight, Radio, PhoneOff, PhoneCall, Volume2 } from 'lucide-react';
+import { Mic, MicOff, Square, Sparkles, Radio, PhoneOff, PhoneCall } from 'lucide-react';
 import { AgentState, LiveConnectionState } from '../types';
 
 interface VoiceOrbProps {
@@ -14,7 +14,6 @@ interface VoiceOrbProps {
   liveTranscript: string;
   continuousMode: boolean;
   onToggleContinuous: () => void;
-  onQuickPrompt: (text: string) => void;
   activeDocNames: string[];
   inputVolume?: number;
   outputVolume?: number;
@@ -32,7 +31,6 @@ export const VoiceOrb: React.FC<VoiceOrbProps> = ({
   liveTranscript,
   continuousMode,
   onToggleContinuous,
-  onQuickPrompt,
   activeDocNames,
   inputVolume = 0,
   outputVolume = 0,
@@ -328,75 +326,12 @@ export const VoiceOrb: React.FC<VoiceOrbProps> = ({
         </div>
       )}
 
-      {/* Suggested Spoken Starters */}
-      <div className="mt-5 w-full max-w-2xl">
-        <div className="flex items-center justify-between text-[11px] tracking-wider uppercase opacity-40 mb-2.5 px-2">
-          <span>Suggested Voice Prompts</span>
-          {activeDocNames.length > 0 && (
-            <span className="text-emerald-400/90 font-mono">
-              ● Grounded in {activeDocNames.length} file{activeDocNames.length > 1 ? 's' : ''}
-            </span>
-          )}
+      {/* Grounding indicator only — no text quick-prompt chips */}
+      {activeDocNames.length > 0 && (
+        <div className="mt-5 text-[11px] tracking-wider uppercase opacity-50 text-emerald-400/90 font-mono">
+          ● Grounded in {activeDocNames.length} file{activeDocNames.length > 1 ? 's' : ''}
         </div>
-        <div className="flex flex-wrap gap-2 justify-center">
-          {activeDocNames.length > 0 ? (
-            <>
-              <button
-                onClick={() => onQuickPrompt("What is the policy for appealing a denied claim?")}
-                className="text-xs bg-white/5 hover:bg-white/10 text-[#E0E2E6] px-3.5 py-2 rounded-xl border border-white/10 hover:border-emerald-400/30 transition-all text-left flex items-center gap-2 backdrop-blur-sm shadow-sm"
-              >
-                <span>"Appeal policy for denied claims?"</span>
-                <ArrowRight className="w-3 h-3 text-emerald-400 opacity-60" />
-              </button>
-              <button
-                onClick={() => onQuickPrompt("When should a billing issue be escalated?")}
-                className="text-xs bg-white/5 hover:bg-white/10 text-[#E0E2E6] px-3.5 py-2 rounded-xl border border-white/10 hover:border-emerald-400/30 transition-all text-left flex items-center gap-2 backdrop-blur-sm shadow-sm"
-              >
-                <span>"When should a billing issue be escalated?"</span>
-                <ArrowRight className="w-3 h-3 text-emerald-400 opacity-60" />
-              </button>
-              <button
-                onClick={() => onQuickPrompt("How are payment failures handled?")}
-                className="text-xs bg-white/5 hover:bg-white/10 text-[#E0E2E6] px-3.5 py-2 rounded-xl border border-white/10 hover:border-emerald-400/30 transition-all text-left flex items-center gap-2 backdrop-blur-sm shadow-sm"
-              >
-                <span>"How are payment failures handled?"</span>
-                <ArrowRight className="w-3 h-3 text-emerald-400 opacity-60" />
-              </button>
-            </>
-          ) : (
-            <>
-              <button
-                onClick={() => onQuickPrompt("Why was claim CLM10002 denied?")}
-                className="text-xs bg-white/5 hover:bg-white/10 text-[#E0E2E6] px-3.5 py-2 rounded-xl border border-white/10 hover:border-emerald-400/30 transition-all text-left flex items-center gap-2 backdrop-blur-sm shadow-sm"
-              >
-                <span>"Why was claim CLM10002 denied?"</span>
-                <ArrowRight className="w-3 h-3 text-emerald-400 opacity-60" />
-              </button>
-              <button
-                onClick={() => onQuickPrompt("What is the status of ticket TKT10001?")}
-                className="text-xs bg-white/5 hover:bg-white/10 text-[#E0E2E6] px-3.5 py-2 rounded-xl border border-white/10 hover:border-emerald-400/30 transition-all text-left flex items-center gap-2 backdrop-blur-sm shadow-sm"
-              >
-                <span>"What's the status of ticket TKT10001?"</span>
-                <ArrowRight className="w-3 h-3 text-emerald-400 opacity-60" />
-              </button>
-              <button
-                onClick={() => onQuickPrompt("What is the policy for appealing a denied claim?")}
-                className="text-xs bg-white/5 hover:bg-white/10 text-[#E0E2E6] px-3.5 py-2 rounded-xl border border-white/10 hover:border-emerald-400/30 transition-all text-left flex items-center gap-2 backdrop-blur-sm shadow-sm"
-              >
-                <span>"Appeal policy for denied claims?"</span>
-                <ArrowRight className="w-3 h-3 text-emerald-400 opacity-60" />
-              </button>
-              <button
-                onClick={() => onQuickPrompt("What is my outstanding balance for account BA10001?")}
-                className="text-xs bg-white/5 hover:bg-white/10 text-[#E0E2E6] px-3.5 py-2 rounded-xl border border-white/10 hover:border-emerald-400/30 transition-all text-left flex items-center gap-2 backdrop-blur-sm shadow-sm"
-              >
-                <span>"What is my outstanding balance?"</span>
-                <ArrowRight className="w-3 h-3 text-emerald-400 opacity-60" />
-              </button>
-            </>
-          )}
-        </div>
-      </div>
+      )}
     </div>
   );
 };

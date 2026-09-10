@@ -10,11 +10,19 @@ import { DocumentFile } from '../types';
 
 export type LiveSessionStatus = 'disconnected' | 'connecting' | 'connected' | 'error';
 
+export interface ModelActivityPayload {
+  text?: string;
+  phase?: string;
+  status?: string;
+  tool?: string;
+}
+
 export interface LiveKitClientOptions {
   onStatusChange?: (status: LiveSessionStatus) => void;
   onUserTranscript?: (text: string) => void;
   onModelTranscript?: (text: string, isFinal?: boolean) => void;
   onModelTurnComplete?: (fullText: string) => void;
+  onModelActivity?: (payload: ModelActivityPayload) => void;
   onVolumeChange?: (inputLevel: number, outputLevel: number) => void;
   onError?: (err: string) => void;
 }
@@ -99,6 +107,13 @@ export class LiveKitClient {
               this.options.onModelTurnComplete?.(data.text);
               this.currentModelUtterance = '';
             }
+          } else if (data.type === 'model_activity') {
+            this.options.onModelActivity?.({
+              text: data.text,
+              phase: data.phase,
+              status: data.status,
+              tool: data.tool,
+            });
           }
         } catch {
           // ignore non-json payloads

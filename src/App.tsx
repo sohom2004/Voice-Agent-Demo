@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef, useCallback } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { Header } from './components/Header';
 import { VoiceOrb } from './components/VoiceOrb';
 import { ConversationTranscript } from './components/ConversationTranscript';
@@ -7,37 +7,40 @@ import { DocumentDrawer } from './components/DocumentDrawer';
 import { VoiceSettingsModal } from './components/VoiceSettingsModal';
 import { DbColumnInspector } from './components/DbColumnInspector';
 import { DebugLogTerminal } from './components/DebugLogTerminal';
-import { SAMPLE_DOCUMENTS } from './data/sampleDocs';
-import { Message, DocumentFile, AgentState, VoiceSettings, VoiceName, LiveConnectionState } from './types';
+import { DocumentFile, AgentState, VoiceSettings, VoiceName, LiveConnectionState, VoiceEvent } from './types';
 import { 
   playPcmAudio, 
   stopCurrentAudio, 
   speakWithBrowser, 
-  createSpeechRecognizer, 
   SpeechRecognitionController 
 } from './utils/audioEngine';
 import { LiveKitClient } from './utils/liveKitClient';
-import { LayoutDashboard, MessageSquare, Database, Terminal, Shield } from 'lucide-react';
+import { LayoutDashboard, Radio } from 'lucide-react';
 
 const INITIAL_GREETING = "Hi, I'm Natasha with medical billing support. I can help with claims, invoices, payments, and support tickets.";
 
-export default function App() {
-  // Main View Switcher: 'dashboard' (Live DB Context & Logs) or 'chat' (Transcript)
-  const [activeView, setActiveView] = useState<'dashboard' | 'chat'>('dashboard');
+function makeVoiceEvent(
+  kind: VoiceEvent['kind'],
+  text: string,
+  extra?: Partial<Pick<VoiceEvent, 'status' | 'tool' | 'id' | 'timestamp'>>
+): VoiceEvent {
+  return {
+    id: extra?.id ?? `ve_${kind}_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
+    kind,
+    text,
+    timestamp: extra?.timestamp ?? Date.now(),
+    status: extra?.status,
+    tool: extra?.tool,
+  };
+}
 
-  // Conversation History
-  const [messages, setMessages] = useState<Message[]>([
-    {
-      id: 'init-greeting',
-      role: 'assistant',
-      content: INITIAL_GREETING,
-      timestamp: Date.now(),
-      suggestedQuestions: [
-        'Why was claim CLM10002 denied?',
-        'What is the status of ticket TKT10001?',
-        'What is the policy for appealing a denied claim?'
-      ]
-    }
+export default function App() {
+  // Main View Switcher: 'voice' (realtime transcript) or 'dashboard' (DB + logs)
+  const [activeView, setActiveView] = useState<'dashboard' | 'voice'>('voice');
+
+  // Realtime voice event feed (user / activity / assistant)
+  const [voiceEvents, setVoiceEvents] = useState<VoiceEvent[]>([
+    makeVoiceEvent('assistant', INITIAL_GREETING, { id: 'init-greeting' }),
   ]);
 
   // Documents
@@ -104,8 +107,6 @@ export default function App() {
   const [outputVolume, setOutputVolume] = useState(0);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [isTestingVoice, setIsTestingVoice] = useState(false);
-  const [activePlayingId, setActivePlayingId] = useState<string | null>(null);
-  const [isPlayingAudio, setIsPlayingAudio] = useState(false);
 
   // Settings
   const [settings, setSettings] = useState<VoiceSettings>({
@@ -120,6 +121,7 @@ export default function App() {
   const liveClientRef = useRef<LiveKitClient | null>(null);
   const isListeningRef = useRef(false);
   const lastSpokenUserUtterance = useRef<string>('');
+  const openUserEventIdRef = useRef<string | null>(null);
 
   const activeDocNames = documents.filter((d) => d.enabled).map((d) => d.name);
 
@@ -140,39 +142,61 @@ export default function App() {
         lastSpokenUserUtterance.current = text;
         setLiveTranscript(`You: ${text}`);
         setAgentState('listening');
+
+        setVoiceEvents((prev) => {
+          const openId = openUserEventIdRef.current;
+          if (openId) {
+            const idx = prev.findIndex((e) => e.id === openId && e.kind === 'user');
+            if (idx >= 0) {
+              const next = [...prev];
+              next[idx] = { ...next[idx], text, timestamp: Date.now() };
+              return next;
+            }
+          }
+          const ev = makeVoiceEvent('user', text);
+          openUserEventIdRef.current = ev.id;
+          return [...prev, ev];
+        });
       },
       onModelTranscript: (text) => {
         setLiveTranscript(`Natasha: ${text}`);
         setAgentState('speaking');
       },
+      onModelActivity: (payload) => {
+        const text = (payload.text || payload.tool || 'Model activity').trim();
+        if (!text) return;
+        const status = payload.phase || payload.status;
+        setVoiceEvents((prev) => [
+          ...prev,
+          makeVoiceEvent('activity', text, {
+            status: status || undefined,
+            tool: payload.tool,
+          }),
+        ]);
+      },
       onModelTurnComplete: (fullText) => {
         setLiveTranscript('');
         setAgentState('idle');
+        openUserEventIdRef.current = null;
 
         const now = Date.now();
-        const newMsgs: Message[] = [];
 
+        // Ensure latest user utterance is recorded if we somehow missed streaming updates
         if (lastSpokenUserUtterance.current.trim()) {
-          newMsgs.push({
-            id: 'msg_user_' + now,
-            role: 'user',
-            content: lastSpokenUserUtterance.current.trim(),
-            timestamp: now - 500,
-          });
+          const userText = lastSpokenUserUtterance.current.trim();
           lastSpokenUserUtterance.current = '';
+          setVoiceEvents((prev) => {
+            const lastUser = [...prev].reverse().find((e) => e.kind === 'user');
+            if (lastUser && lastUser.text === userText) return prev;
+            return [...prev, makeVoiceEvent('user', userText, { timestamp: now - 500 })];
+          });
         }
 
         if (fullText.trim()) {
-          newMsgs.push({
-            id: 'msg_natasha_' + (now + 1),
-            role: 'assistant',
-            content: fullText.trim(),
-            timestamp: now,
-          });
-        }
-
-        if (newMsgs.length > 0) {
-          setMessages((prev) => [...prev, ...newMsgs]);
+          setVoiceEvents((prev) => [
+            ...prev,
+            makeVoiceEvent('assistant', fullText.trim(), { timestamp: now }),
+          ]);
         }
       },
       onVolumeChange: (inVol, outVol) => {
@@ -194,50 +218,6 @@ export default function App() {
     };
   }, []);
 
-  // Play assistant voice
-  const handlePlayVoice = useCallback(async (msg: Message, rate = settings.speechRate) => {
-    stopCurrentAudio();
-    setActivePlayingId(msg.id);
-    setIsPlayingAudio(true);
-    setAgentState('speaking');
-
-    const onAudioEnd = () => {
-      setIsPlayingAudio(false);
-      setActivePlayingId(null);
-      setAgentState('idle');
-    };
-
-    if (msg.audioBase64) {
-      try {
-        await playPcmAudio(msg.audioBase64, onAudioEnd, rate);
-        return;
-      } catch (err) {
-        console.warn('PCM playback failed:', err);
-      }
-    }
-
-    if (settings.selectedVoice === 'browser') {
-      speakWithBrowser(msg.content, settings.selectedVoice, rate, settings.pitch, undefined, onAudioEnd);
-    } else {
-      try {
-        const res = await fetch('/api/tts', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ text: msg.content, voiceName: settings.selectedVoice })
-        });
-        const data = await res.json();
-        if (data.audioBase64) {
-          msg.audioBase64 = data.audioBase64;
-          await playPcmAudio(data.audioBase64, onAudioEnd, rate);
-        } else {
-          speakWithBrowser(msg.content, settings.selectedVoice, rate, settings.pitch, undefined, onAudioEnd);
-        }
-      } catch {
-        speakWithBrowser(msg.content, settings.selectedVoice, rate, settings.pitch, undefined, onAudioEnd);
-      }
-    }
-  }, [settings]);
-
   // Toggle Live Duplex Session
   const handleToggleLive = async () => {
     if (liveStatus === 'connected' || liveStatus === 'connecting') {
@@ -246,12 +226,11 @@ export default function App() {
       setAgentState('idle');
       setLiveTranscript('');
       setIsMuted(false);
+      openUserEventIdRef.current = null;
     } else {
       stopCurrentAudio();
       recognizerRef.current?.stop();
       isListeningRef.current = false;
-      setIsPlayingAudio(false);
-      setActivePlayingId(null);
 
       try {
         await liveClientRef.current?.start(settings.selectedVoice, documents);
@@ -268,82 +247,12 @@ export default function App() {
     }
   };
 
-  const handleSendMessage = async (text: string) => {
-    if (!text.trim()) return;
-
-    if (liveStatus === 'connected' && liveClientRef.current) {
-      liveClientRef.current.sendText(text.trim());
-      lastSpokenUserUtterance.current = text.trim();
-      setLiveTranscript(`You: ${text.trim()}`);
-      return;
-    }
-
-    stopCurrentAudio();
-    setIsPlayingAudio(false);
-    setActivePlayingId(null);
-
-    const userMsg: Message = {
-      id: 'msg_user_' + Date.now(),
-      role: 'user',
-      content: text.trim(),
-      timestamp: Date.now(),
-    };
-
-    setMessages((prev) => [...prev, userMsg]);
-    setAgentState('processing');
-
-    try {
-      const activeDocIds = documents.filter((d) => d.enabled).map((d) => d.id);
-      const res = await fetch('/api/chat', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          message: text.trim(),
-          workspaceId: 'default_workspace',
-          documentIds: activeDocIds,
-          selectedVoice: settings.selectedVoice,
-        }),
-      });
-
-      if (!res.ok) {
-        throw new Error(`Server returned status ${res.status}`);
-      }
-
-      const data = await res.json();
-      const assistantMsg: Message = {
-        id: 'msg_assistant_' + Date.now(),
-        role: 'assistant',
-        content: data.text,
-        timestamp: Date.now(),
-        audioBase64: data.audioBase64,
-        suggestedQuestions: data.suggestedQuestions,
-        groundedDocuments: data.groundedDocs,
-      };
-
-      setMessages((prev) => [...prev, assistantMsg]);
-      setAgentState('idle');
-      handlePlayVoice(assistantMsg);
-    } catch (err: any) {
-      console.error('Chat error:', err);
-      setAgentState('idle');
-      const errMsgs: Message = {
-        id: 'msg_err_' + Date.now(),
-        role: 'assistant',
-        content: "Sorry, I hit an issue connecting. Please try again.",
-        timestamp: Date.now(),
-      };
-      setMessages((prev) => [...prev, errMsgs]);
-    }
-  };
-
   const handleStopSpeaking = () => {
     stopCurrentAudio();
     if (recognizerRef.current) {
       recognizerRef.current.stop();
       isListeningRef.current = false;
     }
-    setIsPlayingAudio(false);
-    setActivePlayingId(null);
     setAgentState('idle');
   };
 
@@ -355,18 +264,10 @@ export default function App() {
 
   const handleNewSession = () => {
     stopCurrentAudio();
-    setMessages([
-      {
-        id: 'init-greeting-' + Date.now(),
-        role: 'assistant',
-        content: INITIAL_GREETING,
-        timestamp: Date.now(),
-        suggestedQuestions: [
-          'Why was claim CLM10002 denied?',
-          'What is the status of ticket TKT10001?',
-          'What is the policy for appealing a denied claim?'
-        ]
-      }
+    openUserEventIdRef.current = null;
+    lastSpokenUserUtterance.current = '';
+    setVoiceEvents([
+      makeVoiceEvent('assistant', INITIAL_GREETING, { id: 'init-greeting-' + Date.now() }),
     ]);
   };
 
@@ -466,6 +367,17 @@ export default function App() {
         <div className="flex items-center justify-between mb-4 bg-slate-900/80 p-1.5 rounded-xl border border-slate-800">
           <div className="flex space-x-1">
             <button
+              onClick={() => setActiveView('voice')}
+              className={`flex items-center space-x-2 px-4 py-2 rounded-lg text-xs font-semibold transition ${
+                activeView === 'voice'
+                  ? 'bg-gradient-to-r from-cyan-600 to-emerald-600 text-white shadow-lg'
+                  : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800'
+              }`}
+            >
+              <Radio className="w-4 h-4" />
+              <span>Voice Agent</span>
+            </button>
+            <button
               onClick={() => setActiveView('dashboard')}
               className={`flex items-center space-x-2 px-4 py-2 rounded-lg text-xs font-semibold transition ${
                 activeView === 'dashboard'
@@ -476,17 +388,6 @@ export default function App() {
               <LayoutDashboard className="w-4 h-4" />
               <span>Live DB Column Context & Debug Dashboard</span>
             </button>
-            <button
-              onClick={() => setActiveView('chat')}
-              className={`flex items-center space-x-2 px-4 py-2 rounded-lg text-xs font-semibold transition ${
-                activeView === 'chat'
-                  ? 'bg-gradient-to-r from-purple-600 to-indigo-600 text-white shadow-lg'
-                  : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800'
-              }`}
-            >
-              <MessageSquare className="w-4 h-4" />
-              <span>Conversation Transcript View</span>
-            </button>
           </div>
           <div className="text-xs text-slate-400 font-mono hidden md:flex items-center space-x-2 px-3">
             <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
@@ -494,7 +395,7 @@ export default function App() {
           </div>
         </div>
 
-        {/* Hero Interactive Voice Orb */}
+        {/* Hero Interactive Voice Orb — always visible */}
         <section aria-label="Natasha Voice Control" className="w-full mb-4">
           <VoiceOrb
             agentState={agentState}
@@ -508,51 +409,38 @@ export default function App() {
             liveTranscript={liveTranscript}
             continuousMode={settings.continuousMode}
             onToggleContinuous={() => setSettings(s => ({ ...s, continuousMode: !s.continuousMode }))}
-            onQuickPrompt={handleSendMessage}
             activeDocNames={activeDocNames}
             inputVolume={inputVolume}
             outputVolume={outputVolume}
           />
         </section>
 
-        {/* View Mode 1: Live Voice Agent Debug & Database Column Inspector Dashboard */}
+        {/* Primary: Realtime voice event feed */}
+        {activeView === 'voice' && (
+          <section aria-label="Voice Transcript" className="flex-1 my-2">
+            <div className="border-t border-white/10 pt-4">
+              <ConversationTranscript events={voiceEvents} />
+            </div>
+          </section>
+        )}
+
+        {/* Dashboard: DB inspector + debug logs */}
         {activeView === 'dashboard' && (
           <section className="grid grid-cols-1 lg:grid-cols-2 gap-4 flex-1 min-h-[550px]">
-            {/* Left Column: Database Column Context Inspector */}
             <div className="h-[550px]">
               <DbColumnInspector tenantId="default_tenant" />
             </div>
-
-            {/* Right Column: Live Debug & Log Terminal Stream */}
             <div className="h-[550px]">
               <DebugLogTerminal />
             </div>
           </section>
         )}
-
-        {/* View Mode 2: Standard Conversation Transcript */}
-        {activeView === 'chat' && (
-          <section aria-label="Conversation Transcript" className="flex-1 my-2">
-            <div className="border-t border-white/10 pt-4">
-              <ConversationTranscript
-                messages={messages}
-                activePlayingId={activePlayingId}
-                isPlayingAudio={isPlayingAudio}
-                onPlayAudio={handlePlayVoice}
-                onStopAudio={handleStopSpeaking}
-                onAskSuggested={handleSendMessage}
-                speechRate={settings.speechRate}
-              />
-            </div>
-          </section>
-        )}
       </main>
 
-      {/* Sticky Input Bar */}
+      {/* Sticky Voice Control Strip */}
       <VoiceInputBar
         agentState={agentState}
         isLiveActive={liveStatus === 'connected'}
-        onSendMessage={handleSendMessage}
         onToggleListen={handleToggleListen}
         onToggleLive={handleToggleLive}
         onStopSpeaking={handleStopSpeaking}
@@ -569,7 +457,6 @@ export default function App() {
         onDeleteDocument={handleDeleteDocument}
         onAddDocuments={handleAddDocuments}
         onResetSamples={handleResetSamples}
-        onAskQuestion={handleSendMessage}
       />
 
       {/* Settings Modal */}
