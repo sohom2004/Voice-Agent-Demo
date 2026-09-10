@@ -17,6 +17,9 @@ __pycache__/
 *.db
 !uploads/.gitkeep
 
+# Server-local sql-mcp active connections (may contain secrets)
+.sqlmcp/
+
 # Local scratchpad and temporary uploads
 scratch/*
 !scratch/.gitkeep
