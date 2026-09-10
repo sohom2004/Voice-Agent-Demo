@@ -28,24 +28,38 @@ class SqlMcpEngine:
     def __init__(self, config: ConnectionConfig | None = None):
         self.config = config or ConnectionConfig()
         self._manifest: ToolManifest | None = None
+        self._conn: Any | None = None
         self._ensure_demo_sqlite()
 
     def update_connection(self, config: ConnectionConfig) -> None:
+        self.close()
         self.config = config
         self._manifest = None
-        if config.dialect == "sqlite":
-            self._ensure_demo_sqlite()
+        self._ensure_demo_sqlite()
+
+    def close(self) -> None:
+        """Close the pooled connection if open."""
+        if self._conn is not None:
+            try:
+                self._conn.close()
+            except Exception:
+                pass
+            self._conn = None
+
+    def disconnect(self) -> None:
+        """Alias for close() — release the persistent DB connection."""
+        self.close()
 
     def _ensure_demo_sqlite(self) -> None:
-        if self.config.dialect != "sqlite":
+        # Only auto-seed the known medical-billing demo DB — never clobber
+        # arbitrary user sqlite files.
+        if not self.config.is_demo_sqlite():
             return
-        # Auto-create the medical-billing BPO demo DB when missing.
-        # Developers can also rebuild via: python3 scripts/init_demo_database.py
         ensure_demo_database(self.config.database)
 
     def _connect_sqlite(self) -> sqlite3.Connection:
         db_path = Path(self.config.database)
-        conn = sqlite3.connect(str(db_path))
+        conn = sqlite3.connect(str(db_path), check_same_thread=False)
         conn.row_factory = sqlite3.Row
         conn.execute("PRAGMA foreign_keys = ON")
         return conn
@@ -63,12 +77,79 @@ class SqlMcpEngine:
             cursor_factory=RealDictCursor,
         )
 
-    def _connect(self):
+    def _connect_mysql(self):
+        import pymysql
+        from pymysql.cursors import DictCursor
+
+        return pymysql.connect(
+            host=self.config.host,
+            port=int(self.config.port or 3306),
+            user=self.config.user,
+            password=self.config.password,
+            database=self.config.database,
+            cursorclass=DictCursor,
+            autocommit=False,
+        )
+
+    def _open_connection(self):
         if self.config.dialect == "sqlite":
             return self._connect_sqlite()
         if self.config.dialect == "postgres":
             return self._connect_postgres()
+        if self.config.dialect == "mysql":
+            return self._connect_mysql()
         raise ValueError(f"Unsupported dialect: {self.config.dialect}")
+
+    def _get_connection(self):
+        """Return the persistent connection, opening one if needed."""
+        if self._conn is None:
+            self._conn = self._open_connection()
+        return self._conn
+
+    def _reset_connection(self) -> None:
+        """Drop a broken pooled connection so the next call reopens."""
+        if self._conn is not None:
+            try:
+                self._conn.close()
+            except Exception:
+                pass
+            self._conn = None
+
+    def _is_fatal_connection_error(self, exc: BaseException) -> bool:
+        name = type(exc).__name__.lower()
+        msg = str(exc).lower()
+        fatal_markers = (
+            "connection",
+            "closed",
+            "gone away",
+            "broken pipe",
+            "server has gone",
+            "interfaceerror",
+            "operationalerror",
+            "not connected",
+            "lost connection",
+        )
+        if any(m in name for m in ("interface", "operational", "connection")):
+            # Narrow: only treat as fatal when the message looks connection-related,
+            # so constraint/integrity OperationalErrors keep the pool alive.
+            if any(m in msg for m in fatal_markers):
+                return True
+            if "no such" in msg or "syntax" in msg or "constraint" in msg or "unique" in msg:
+                return False
+            # sqlite OperationalError for "unable to open" etc.
+            if "unable to open" in msg or "disk i/o" in msg:
+                return True
+        return any(
+            m in msg
+            for m in (
+                "connection already closed",
+                "server closed the connection",
+                "mysql server has gone away",
+                "broken pipe",
+                "not connected",
+                "lost connection",
+            )
+        )
 
     def _rows_to_dicts(self, rows: list[Any]) -> list[dict[str, Any]]:
         if not rows:
@@ -77,11 +158,17 @@ class SqlMcpEngine:
         if isinstance(first, sqlite3.Row):
             return [dict(row) for row in rows]
         if isinstance(first, dict):
-            return rows
+            return list(rows)
         return [dict(row) for row in rows]
 
+    def _placeholder(self) -> str:
+        # postgres and mysql use pyformat %s; sqlite uses ?
+        if self.config.dialect in ("postgres", "mysql"):
+            return "%s"
+        return "?"
+
     def list_tables(self) -> list[str]:
-        conn = self._connect()
+        conn = self._get_connection()
         try:
             cur = conn.cursor()
             if self.config.dialect == "sqlite":
@@ -89,6 +176,18 @@ class SqlMcpEngine:
                     "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name"
                 )
                 return [row[0] for row in cur.fetchall()]
+            if self.config.dialect == "mysql":
+                cur.execute(
+                    """
+                    SELECT table_name
+                    FROM information_schema.tables
+                    WHERE table_schema = DATABASE() AND table_type = 'BASE TABLE'
+                    ORDER BY table_name
+                    """
+                )
+                rows = cur.fetchall()
+                return [row["table_name"] if isinstance(row, dict) else row[0] for row in rows]
+            # postgres
             cur.execute(
                 """
                 SELECT table_name
@@ -98,53 +197,216 @@ class SqlMcpEngine:
                 """
             )
             return [row["table_name"] for row in cur.fetchall()]
-        finally:
-            conn.close()
+        except Exception as exc:
+            if self._is_fatal_connection_error(exc):
+                self._reset_connection()
+            raise
 
     def describe_table(self, table_name: str) -> TableMeta:
-        conn = self._connect()
+        conn = self._get_connection()
         try:
-            cur = conn.cursor()
-            columns: list[ColumnMeta] = []
             if self.config.dialect == "sqlite":
-                cur.execute(f"PRAGMA table_info({table_name})")
-                for row in cur.fetchall():
-                    columns.append(
-                        ColumnMeta(
-                            name=row[1],
-                            data_type=row[2] or "TEXT",
-                            is_nullable=row[3] == 0,
-                            is_primary_key=bool(row[5]),
-                        )
-                    )
-            else:
-                cur.execute(
-                    """
-                    SELECT column_name, data_type, is_nullable
-                    FROM information_schema.columns
-                    WHERE table_schema = 'public' AND table_name = %s
-                    ORDER BY ordinal_position
-                    """,
-                    (table_name,),
+                return self._describe_sqlite(conn, table_name)
+            if self.config.dialect == "mysql":
+                return self._describe_mysql(conn, table_name)
+            return self._describe_postgres(conn, table_name)
+        except Exception as exc:
+            if self._is_fatal_connection_error(exc):
+                self._reset_connection()
+            raise
+
+    def _describe_sqlite(self, conn: Any, table_name: str) -> TableMeta:
+        cur = conn.cursor()
+        cur.execute(f"PRAGMA table_info({table_name})")
+        info_rows = cur.fetchall()
+        fk_map: dict[str, tuple[str, str]] = {}
+        try:
+            cur.execute(f"PRAGMA foreign_key_list({table_name})")
+            for row in cur.fetchall():
+                # id, seq, table, from, to, on_update, on_delete, match
+                from_col = row[3]
+                ref_table = row[2]
+                ref_col = row[4]
+                fk_map[from_col] = (ref_table, ref_col)
+        except Exception:
+            pass
+
+        columns: list[ColumnMeta] = []
+        for row in info_rows:
+            name = row[1]
+            ref = fk_map.get(name)
+            columns.append(
+                ColumnMeta(
+                    name=name,
+                    data_type=row[2] or "TEXT",
+                    is_nullable=row[3] == 0,
+                    is_primary_key=bool(row[5]),
+                    is_foreign_key=ref is not None,
+                    references_table=ref[0] if ref else None,
+                    references_column=ref[1] if ref else None,
                 )
-                for row in cur.fetchall():
-                    columns.append(
-                        ColumnMeta(
-                            name=row["column_name"],
-                            data_type=row["data_type"],
-                            is_nullable=row["is_nullable"] == "YES",
-                        )
-                    )
-            return TableMeta(name=table_name, columns=columns)
-        finally:
-            conn.close()
+            )
+        return TableMeta(name=table_name, columns=columns)
+
+    def _describe_postgres(self, conn: Any, table_name: str) -> TableMeta:
+        cur = conn.cursor()
+        cur.execute(
+            """
+            SELECT column_name, data_type, is_nullable
+            FROM information_schema.columns
+            WHERE table_schema = 'public' AND table_name = %s
+            ORDER BY ordinal_position
+            """,
+            (table_name,),
+        )
+        col_rows = cur.fetchall()
+
+        pk_cols: set[str] = set()
+        try:
+            cur.execute(
+                """
+                SELECT kcu.column_name
+                FROM information_schema.table_constraints tc
+                JOIN information_schema.key_column_usage kcu
+                  ON tc.constraint_name = kcu.constraint_name
+                 AND tc.table_schema = kcu.table_schema
+                WHERE tc.constraint_type = 'PRIMARY KEY'
+                  AND tc.table_schema = 'public'
+                  AND tc.table_name = %s
+                """,
+                (table_name,),
+            )
+            for row in cur.fetchall():
+                pk_cols.add(row["column_name"])
+        except Exception:
+            pass
+
+        fk_map: dict[str, tuple[str, str]] = {}
+        try:
+            cur.execute(
+                """
+                SELECT
+                    kcu.column_name AS column_name,
+                    ccu.table_name AS references_table,
+                    ccu.column_name AS references_column
+                FROM information_schema.table_constraints tc
+                JOIN information_schema.key_column_usage kcu
+                  ON tc.constraint_name = kcu.constraint_name
+                 AND tc.table_schema = kcu.table_schema
+                JOIN information_schema.constraint_column_usage ccu
+                  ON ccu.constraint_name = tc.constraint_name
+                 AND ccu.table_schema = tc.table_schema
+                WHERE tc.constraint_type = 'FOREIGN KEY'
+                  AND tc.table_schema = 'public'
+                  AND tc.table_name = %s
+                """,
+                (table_name,),
+            )
+            for row in cur.fetchall():
+                fk_map[row["column_name"]] = (row["references_table"], row["references_column"])
+        except Exception:
+            pass
+
+        columns: list[ColumnMeta] = []
+        for row in col_rows:
+            name = row["column_name"]
+            ref = fk_map.get(name)
+            columns.append(
+                ColumnMeta(
+                    name=name,
+                    data_type=row["data_type"],
+                    is_nullable=row["is_nullable"] == "YES",
+                    is_primary_key=name in pk_cols,
+                    is_foreign_key=ref is not None,
+                    references_table=ref[0] if ref else None,
+                    references_column=ref[1] if ref else None,
+                )
+            )
+        return TableMeta(name=table_name, columns=columns)
+
+    def _describe_mysql(self, conn: Any, table_name: str) -> TableMeta:
+        cur = conn.cursor()
+        cur.execute(
+            """
+            SELECT column_name, data_type, is_nullable, column_key
+            FROM information_schema.columns
+            WHERE table_schema = DATABASE() AND table_name = %s
+            ORDER BY ordinal_position
+            """,
+            (table_name,),
+        )
+        col_rows = cur.fetchall()
+
+        fk_map: dict[str, tuple[str, str]] = {}
+        try:
+            cur.execute(
+                """
+                SELECT
+                    column_name,
+                    referenced_table_name,
+                    referenced_column_name
+                FROM information_schema.key_column_usage
+                WHERE table_schema = DATABASE()
+                  AND table_name = %s
+                  AND referenced_table_name IS NOT NULL
+                """,
+                (table_name,),
+            )
+            for row in cur.fetchall():
+                col = row["column_name"] if isinstance(row, dict) else row[0]
+                ref_table = row["referenced_table_name"] if isinstance(row, dict) else row[1]
+                ref_col = row["referenced_column_name"] if isinstance(row, dict) else row[2]
+                fk_map[col] = (ref_table, ref_col)
+        except Exception:
+            pass
+
+        columns: list[ColumnMeta] = []
+        for row in col_rows:
+            if isinstance(row, dict):
+                name = row["column_name"]
+                data_type = row["data_type"]
+                is_nullable = row["is_nullable"] == "YES"
+                column_key = (row.get("column_key") or "").upper()
+            else:
+                name = row[0]
+                data_type = row[1]
+                is_nullable = row[2] == "YES"
+                column_key = (row[3] or "").upper()
+            ref = fk_map.get(name)
+            columns.append(
+                ColumnMeta(
+                    name=name,
+                    data_type=data_type,
+                    is_nullable=is_nullable,
+                    is_primary_key=column_key == "PRI",
+                    is_foreign_key=ref is not None,
+                    references_table=ref[0] if ref else None,
+                    references_column=ref[1] if ref else None,
+                )
+            )
+        return TableMeta(name=table_name, columns=columns)
 
     def get_schema_snapshot(self) -> SchemaSnapshot:
         tables = []
         for table_name in self.list_tables():
             tables.append(self.describe_table(table_name))
+        # Include types + PK/FK so type/key changes invalidate the cache.
         payload = json.dumps(
-            [{"name": t.name, "columns": [c.name for c in t.columns]} for t in tables],
+            [
+                {
+                    "name": t.name,
+                    "columns": [
+                        {
+                            "name": c.name,
+                            "data_type": c.data_type,
+                            "is_primary_key": c.is_primary_key,
+                            "is_foreign_key": c.is_foreign_key,
+                        }
+                        for c in t.columns
+                    ],
+                }
+                for t in tables
+            ],
             sort_keys=True,
         )
         schema_hash = hashlib.sha256(payload.encode()).hexdigest()[:16]
@@ -155,6 +417,31 @@ class SqlMcpEngine:
             fetched_at=datetime.now(timezone.utc).isoformat(),
             tables=tables,
         )
+
+    def test_connection(self) -> dict[str, Any]:
+        """Open/use the connection and list tables without compiling a manifest.
+
+        Safe to call before committing a connection into a registry — does not
+        produce voice-path side effects beyond the connection check itself.
+        """
+        try:
+            tables = self.list_tables()
+            return {
+                "status": "ok",
+                "dialect": self.config.dialect,
+                "tableCount": len(tables),
+                "tables": tables,
+            }
+        except Exception as exc:
+            if self._is_fatal_connection_error(exc):
+                self._reset_connection()
+            return {
+                "status": "error",
+                "error": str(exc),
+                "dialect": self.config.dialect,
+                "tableCount": 0,
+                "tables": [],
+            }
 
     # ------------------------------------------------------------------
     # Compiled fast-path (see sql_mcp/manifest.py). Schema is introspected
@@ -196,9 +483,6 @@ class SqlMcpEngine:
             }
         return self._execute_manifest_tool(tool, arguments)
 
-    def _placeholder(self) -> str:
-        return "%s" if self.config.dialect == "postgres" else "?"
-
     def _validate_manifest_params(self, tool: ToolDefinition, arguments: dict[str, Any]) -> None:
         allowed = {p.name for p in tool.params}
         allowed.add("confirmed")
@@ -227,6 +511,35 @@ class SqlMcpEngine:
         payload = {k: v for k, v in arguments.items() if k != "confirmed"}
         return f'{tool.operation} on "{tool.table}" with {json.dumps(payload, default=str)}'
 
+    def _mysql_fetch_by_lastrowid(
+        self, cur: Any, table: str, lastrowid: Any, ph: str
+    ) -> dict[str, Any] | None:
+        """Best-effort re-select after MySQL INSERT using AUTO_INCREMENT lastrowid."""
+        try:
+            cur.execute(
+                """
+                SELECT column_name
+                FROM information_schema.columns
+                WHERE table_schema = DATABASE()
+                  AND table_name = %s
+                  AND column_key = 'PRI'
+                ORDER BY ordinal_position
+                LIMIT 1
+                """,
+                (table,),
+            )
+            row = cur.fetchone()
+            if not row:
+                return None
+            pk_name = row["column_name"] if isinstance(row, dict) else row[0]
+            cur.execute(f"SELECT * FROM {table} WHERE {pk_name} = {ph}", [lastrowid])
+            fetched = cur.fetchone()
+            if fetched is None:
+                return None
+            return self._rows_to_dicts([fetched])[0]
+        except Exception:
+            return None
+
     def _execute_manifest_tool(self, tool: ToolDefinition, arguments: dict[str, Any]) -> dict[str, Any]:
         try:
             self._validate_manifest_params(tool, arguments)
@@ -242,7 +555,7 @@ class SqlMcpEngine:
             }
 
         ph = self._placeholder()
-        conn = self._connect()
+        conn = self._get_connection()
         try:
             cur = conn.cursor()
 
@@ -276,11 +589,14 @@ class SqlMcpEngine:
                 placeholders = ", ".join([ph] * len(columns))
 
                 if self.config.dialect == "postgres":
-                    cur.execute(f"INSERT INTO {tool.table} ({col_sql}) VALUES ({placeholders}) RETURNING *", values)
+                    cur.execute(
+                        f"INSERT INTO {tool.table} ({col_sql}) VALUES ({placeholders}) RETURNING *",
+                        values,
+                    )
                     row = cur.fetchone()
                     conn.commit()
                     inserted = self._rows_to_dicts([row])[0] if row else dict(zip(columns, values))
-                else:
+                elif self.config.dialect == "sqlite":
                     cur.execute(f"INSERT INTO {tool.table} ({col_sql}) VALUES ({placeholders})", values)
                     conn.commit()
                     inserted = dict(zip(columns, values))
@@ -289,6 +605,16 @@ class SqlMcpEngine:
                         row = cur.fetchone()
                         if row is not None:
                             inserted = self._rows_to_dicts([row])[0]
+                else:
+                    # MySQL — no RETURNING; re-select via lastrowid when possible.
+                    cur.execute(f"INSERT INTO {tool.table} ({col_sql}) VALUES ({placeholders})", values)
+                    conn.commit()
+                    inserted = dict(zip(columns, values))
+                    lastrowid = getattr(cur, "lastrowid", None)
+                    if lastrowid is not None:
+                        reselected = self._mysql_fetch_by_lastrowid(cur, tool.table, lastrowid, ph)
+                        if reselected is not None:
+                            inserted = reselected
                 return {"status": "ok", "data": inserted, "row_count": 1, "tool_used": tool.name}
 
             if tool.operation == "update_by_id":
@@ -329,9 +655,9 @@ class SqlMcpEngine:
                 conn.rollback()
             except Exception:
                 pass
+            if self._is_fatal_connection_error(exc):
+                self._reset_connection()
             return {"status": "error", "error": str(exc), "tool_used": tool.name}
-        finally:
-            conn.close()
 
     def _validate_read_sql(self, sql: str) -> str:
         cleaned = sql.strip().rstrip(";")
@@ -357,16 +683,16 @@ class SqlMcpEngine:
 
     def execute_read(self, sql: str, params: list[Any] | None = None) -> dict[str, Any]:
         query = self._validate_read_sql(sql)
-        conn = self._connect()
+        conn = self._get_connection()
         try:
             cur = conn.cursor()
             cur.execute(query, params or [])
             rows = self._rows_to_dicts(cur.fetchall())
             return {"status": "ok", "row_count": len(rows), "rows": rows}
         except Exception as exc:
+            if self._is_fatal_connection_error(exc):
+                self._reset_connection()
             return {"status": "error", "error": str(exc)}
-        finally:
-            conn.close()
 
     def execute_write(
         self, sql: str, params: list[Any] | None = None, confirmed: bool = False
@@ -378,7 +704,7 @@ class SqlMcpEngine:
                 "pending_sql": sql,
             }
         query = self._validate_write_sql(sql)
-        conn = self._connect()
+        conn = self._get_connection()
         try:
             cur = conn.cursor()
             cur.execute(query, params or [])
@@ -386,10 +712,13 @@ class SqlMcpEngine:
             rowcount = cur.rowcount if cur.rowcount is not None else 0
             return {"status": "ok", "rows_affected": rowcount}
         except Exception as exc:
-            conn.rollback()
+            try:
+                conn.rollback()
+            except Exception:
+                pass
+            if self._is_fatal_connection_error(exc):
+                self._reset_connection()
             return {"status": "error", "error": str(exc)}
-        finally:
-            conn.close()
 
     def get_tool_definitions(self) -> list[dict[str, Any]]:
         return [
