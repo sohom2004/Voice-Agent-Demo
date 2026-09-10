@@ -19,6 +19,7 @@ if _GEMINI_KEY and not _GOOGLE_KEY:
     os.environ["GOOGLE_API_KEY"] = _GEMINI_KEY
 API_KEY = os.getenv("GOOGLE_API_KEY") or _GEMINI_KEY
 
+from livekit import rtc  # noqa: E402
 from livekit.agents import (  # noqa: E402
     Agent,
     AgentServer,
@@ -438,15 +439,21 @@ async def entrypoint(ctx: JobContext):
 
     instructions = _bind_session_database(str(tenant_id))
 
-    # Gemini Live barge-in: start-of-speech interrupts the model immediately.
-    # Keep silence_duration modest so end-of-turn stays snappy (no added latency).
+    # Gemini Live barge-in tuning:
+    # - START_SENSITIVITY_HIGH + short prefix padding → stop quickly when the user talks
+    # - min_duration ~280ms → ignore brief coughs/noise, still catch real barge-ins
+    # - END_SENSITIVITY_LOW → don't cut the user's interrupt utterance short
+    # - no backchannel suppression near turn edges
     session = AgentSession(
         turn_handling=TurnHandlingOptions(
             turn_detection="realtime_llm",
             interruption={
                 "enabled": True,
-                "min_duration": 0.2,
+                "min_duration": 0.28,
+                "min_words": 0,
                 "resume_false_interruption": False,
+                "false_interruption_timeout": 1.0,
+                "backchannel_boundary": None,
             },
         ),
         llm=google.realtime.RealtimeModel(
@@ -459,9 +466,9 @@ async def entrypoint(ctx: JobContext):
                 automatic_activity_detection=genai_types.AutomaticActivityDetection(
                     disabled=False,
                     start_of_speech_sensitivity=genai_types.StartSensitivity.START_SENSITIVITY_HIGH,
-                    end_of_speech_sensitivity=genai_types.EndSensitivity.END_SENSITIVITY_HIGH,
-                    prefix_padding_ms=20,
-                    silence_duration_ms=400,
+                    end_of_speech_sensitivity=genai_types.EndSensitivity.END_SENSITIVITY_LOW,
+                    prefix_padding_ms=10,
+                    silence_duration_ms=450,
                 ),
             ),
         ),
@@ -471,6 +478,22 @@ async def entrypoint(ctx: JobContext):
         instructions=instructions,
         tools=[*DB_FAST_PATH_TOOLS, run_custom_read_query, *TICKET_TOOLS, search_documents],
     )
+
+    def _on_data_received(data: rtc.DataPacket) -> None:
+        """UI interrupt button / explicit barge-in signal from the browser client."""
+        try:
+            msg = json.loads(data.data.decode("utf-8"))
+        except Exception:
+            return
+        if not isinstance(msg, dict) or msg.get("type") != "interrupt":
+            return
+        try:
+            session.interrupt(force=True)
+            logger.info("Interrupted agent speech via client signal")
+        except Exception as exc:
+            logger.warning("Client interrupt failed: %s", exc)
+
+    ctx.room.on("data_received", _on_data_received)
 
     _wire_transcript_events(session)
     await session.start(agent=agent, room=ctx.room)

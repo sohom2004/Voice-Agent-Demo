@@ -33,6 +33,8 @@ export class LiveKitClient {
   private isMuted = false;
   private currentModelUtterance = '';
   private options: LiveKitClientOptions;
+  private remoteAudioElements: HTMLMediaElement[] = [];
+  private unmuteTimer: ReturnType<typeof setTimeout> | null = null;
 
   constructor(options: LiveKitClientOptions = {}) {
     this.options = options;
@@ -45,6 +47,15 @@ export class LiveKitClient {
 
   public getStatus(): LiveSessionStatus {
     return this.status;
+  }
+
+  private setRemoteAudioMuted(muted: boolean) {
+    for (const el of this.remoteAudioElements) {
+      el.muted = muted;
+      if (!muted) {
+        void el.play().catch(() => undefined);
+      }
+    }
   }
 
   public async start(voiceName?: string, documents: DocumentFile[] = []): Promise<void> {
@@ -72,6 +83,14 @@ export class LiveKitClient {
       const room = new Room({
         adaptiveStream: true,
         dynacast: true,
+        // Critical for barge-in: keep agent playback out of the mic so Gemini
+        // can hear the user and actually interrupt instead of talking over them.
+        audioCaptureDefaults: {
+          echoCancellation: true,
+          noiseSuppression: true,
+          autoGainControl: true,
+          voiceIsolation: true,
+        },
       });
       this.room = room;
 
@@ -92,6 +111,16 @@ export class LiveKitClient {
           const element = track.attach();
           element.autoplay = true;
           document.body.appendChild(element);
+          this.remoteAudioElements.push(element);
+        }
+      });
+
+      room.on(RoomEvent.TrackUnsubscribed, (track) => {
+        if (track.kind !== Track.Kind.Audio) return;
+        const detached = track.detach();
+        for (const el of detached) {
+          this.remoteAudioElements = this.remoteAudioElements.filter((x) => x !== el);
+          el.remove();
         }
       });
 
@@ -121,7 +150,12 @@ export class LiveKitClient {
       });
 
       await room.connect(url, token);
-      await room.localParticipant.setMicrophoneEnabled(!this.isMuted);
+      await room.localParticipant.setMicrophoneEnabled(!this.isMuted, {
+        echoCancellation: true,
+        noiseSuppression: true,
+        autoGainControl: true,
+        voiceIsolation: true,
+      });
       this.setStatus('connected');
     } catch (err: any) {
       this.setStatus('error');
@@ -131,6 +165,14 @@ export class LiveKitClient {
   }
 
   public stop(): void {
+    if (this.unmuteTimer) {
+      clearTimeout(this.unmuteTimer);
+      this.unmuteTimer = null;
+    }
+    for (const el of this.remoteAudioElements) {
+      el.remove();
+    }
+    this.remoteAudioElements = [];
     if (this.room) {
       this.room.disconnect();
       this.room = null;
@@ -141,9 +183,30 @@ export class LiveKitClient {
   public toggleMute(): boolean {
     this.isMuted = !this.isMuted;
     if (this.room) {
-      this.room.localParticipant.setMicrophoneEnabled(!this.isMuted);
+      this.room.localParticipant.setMicrophoneEnabled(!this.isMuted, {
+        echoCancellation: true,
+        noiseSuppression: true,
+        autoGainControl: true,
+        voiceIsolation: true,
+      });
     }
     return this.isMuted;
+  }
+
+  /** Immediately silence local playback and tell the agent to stop speaking. */
+  public interrupt(): void {
+    if (!this.room) return;
+
+    this.setRemoteAudioMuted(true);
+    if (this.unmuteTimer) clearTimeout(this.unmuteTimer);
+    // Re-enable playback shortly so the agent's next reply is audible.
+    this.unmuteTimer = setTimeout(() => {
+      this.setRemoteAudioMuted(false);
+      this.unmuteTimer = null;
+    }, 450);
+
+    const payload = new TextEncoder().encode(JSON.stringify({ type: 'interrupt' }));
+    void this.room.localParticipant.publishData(payload, { reliable: true });
   }
 
   public sendText(text: string): void {

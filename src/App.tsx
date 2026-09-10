@@ -249,11 +249,15 @@ export default function App() {
 
   const handleStopSpeaking = () => {
     stopCurrentAudio();
+    // Live call: actually barge in (mute buffered agent audio + signal worker).
+    if (liveStatus === 'connected') {
+      liveClientRef.current?.interrupt();
+    }
     if (recognizerRef.current) {
       recognizerRef.current.stop();
       isListeningRef.current = false;
     }
-    setAgentState('idle');
+    setAgentState(liveStatus === 'connected' ? 'listening' : 'idle');
   };
 
   const handleToggleListen = () => {
