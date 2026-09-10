@@ -23,7 +23,7 @@ interface DocumentDrawerProps {
   onDeleteDocument: (id: string) => void;
   onAddDocuments: (files: DocumentFile[]) => void;
   onResetSamples: () => void;
-  onAskQuestion: (question: string) => void;
+  onAskQuestion?: (question: string) => void;
 }
 
 export const DocumentDrawer: React.FC<DocumentDrawerProps> = ({
@@ -299,8 +299,8 @@ export const DocumentDrawer: React.FC<DocumentDrawerProps> = ({
                         </p>
                       )}
 
-                      {/* Suggested Spoken Questions */}
-                      {doc.suggestedQuestions && doc.suggestedQuestions.length > 0 && doc.enabled && (
+                      {/* Suggested Spoken Questions — only when a text ask handler is wired */}
+                      {onAskQuestion && doc.suggestedQuestions && doc.suggestedQuestions.length > 0 && doc.enabled && (
                         <div className="mt-2.5 pt-2 border-t border-white/5">
                           <p className="text-[10px] uppercase tracking-wider font-semibold opacity-40 mb-1.5 flex items-center gap-1">
                             <Sparkles className="w-3 h-3 text-emerald-400" />

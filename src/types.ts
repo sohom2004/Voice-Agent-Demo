@@ -10,6 +10,16 @@ export interface Message {
   suggestedQuestions?: string[];
 }
 
+/** Realtime voice transcript / activity feed event (not traditional chat bubbles). */
+export interface VoiceEvent {
+  id: string;
+  kind: 'user' | 'activity' | 'assistant';
+  text: string;
+  timestamp: number;
+  status?: 'start' | 'done' | string;
+  tool?: string;
+}
+
 export interface DocumentFile {
   id: string;
   name: string;
