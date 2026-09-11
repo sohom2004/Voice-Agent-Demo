@@ -26,6 +26,9 @@ scratch/*
 uploads/*
 !uploads/.gitkeep
 
+# Local Gmail OAuth helper (contains client setup; keep out of git for now)
+refresh-token.py
+
 # IDE / Editor configuration
 .vscode/
 .idea/
