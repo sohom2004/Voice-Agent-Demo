@@ -8,6 +8,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from .config import settings
 from .routes.chat import router as chat_router
 from .routes.documents import router as documents_router
+from .routes.email import router as email_router
 from .routes.livekit import router as livekit_router
 from .routes.sql_mcp import router as sql_mcp_router
 from .services.documents import document_service
@@ -34,6 +35,7 @@ app.add_middleware(
 
 app.include_router(documents_router)
 app.include_router(chat_router)
+app.include_router(email_router)
 app.include_router(livekit_router)
 app.include_router(sql_mcp_router)
 

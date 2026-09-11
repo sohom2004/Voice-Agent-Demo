@@ -19,7 +19,7 @@ export interface ModelActivityPayload {
 
 export interface LiveKitClientOptions {
   onStatusChange?: (status: LiveSessionStatus) => void;
-  onUserTranscript?: (text: string) => void;
+  onUserTranscript?: (text: string, isFinal?: boolean) => void;
   onModelTranscript?: (text: string, isFinal?: boolean) => void;
   onModelTurnComplete?: (fullText: string) => void;
   onModelActivity?: (payload: ModelActivityPayload) => void;
@@ -128,11 +128,14 @@ export class LiveKitClient {
         try {
           const data = JSON.parse(new TextDecoder().decode(payload));
           if (data.type === 'user_transcript') {
-            this.options.onUserTranscript?.(data.text);
+            this.options.onUserTranscript?.(data.text, data.final);
           } else if (data.type === 'agent_transcript') {
+            const isFinal = Boolean(data.final);
             this.currentModelUtterance = data.text;
-            this.options.onModelTranscript?.(data.text, data.final);
-            if (data.final) {
+            this.options.onModelTranscript?.(data.text, isFinal);
+            if (isFinal) {
+              // Fire turn-complete once per finalized utterance; App dedupes
+              // if the assistant event was already committed in-place.
               this.options.onModelTurnComplete?.(data.text);
               this.currentModelUtterance = '';
             }
