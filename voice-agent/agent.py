@@ -50,6 +50,14 @@ from sql_mcp.ticket_workflow import (  # noqa: E402
 
 from doc_retrieval import DocRetrievalEngine, RetrievalConfig  # noqa: E402
 
+from frontend_bridge import (  # noqa: E402
+    activity_text_for_tool,
+    publish_event as bridge_publish_event,
+    set_active_room,
+    wire_session_events,
+)
+from email_tools import EMAIL_TOOLS, reset_email_flow  # noqa: E402
+
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("voice-agent")
 
@@ -125,35 +133,13 @@ _active_room: Any | None = None
 
 
 async def _publish_event(payload: dict[str, Any]) -> None:
-    room = _active_room
-    if room is None:
-        return
-    try:
-        await room.local_participant.publish_data(
-            json.dumps(payload, default=str).encode("utf-8"),
-            reliable=True,
-        )
-    except Exception as exc:
-        logger.debug("Voice UI event publish failed: %s", exc)
+    """Delegate UI data-channel publishes to the shared frontend bridge."""
+    await bridge_publish_event(payload)
 
 
 def _activity_label(tool_name: str, phase: str) -> str:
-    pretty = tool_name.replace("_", " ")
-    if phase == "start":
-        if tool_name.startswith(("get_", "list_", "count_")) or tool_name == "run_custom_read_query":
-            return f"Checking database ({pretty})..."
-        if tool_name.startswith("search_"):
-            return f"Searching documents ({pretty})..."
-        if "ticket" in tool_name:
-            return f"Working on ticket ({pretty})..."
-        return f"Running {pretty}..."
-    if tool_name.startswith(("get_", "list_", "count_")) or tool_name == "run_custom_read_query":
-        return "Database lookup completed."
-    if tool_name.startswith("search_"):
-        return "Document search completed."
-    if "ticket" in tool_name:
-        return "Ticket action completed."
-    return f"{pretty} completed."
+    status = "start" if phase == "start" else "done"
+    return activity_text_for_tool(tool_name, status)
 
 
 def _make_fast_path_tool(tool_name: str):
@@ -353,62 +339,6 @@ def _bind_session_database(tenant_id: str) -> str:
     return build_system_prompt(_DB_SCHEMA_SUMMARY)
 
 
-def _wire_transcript_events(session: AgentSession) -> None:
-    """Forward existing realtime transcript signals to the frontend data channel.
-
-    Uses LiveKit/Gemini session events already produced by the runtime —
-    no extra LLM calls and no fabricated chain-of-thought.
-    """
-
-    def _text_of(value: Any) -> str:
-        if value is None:
-            return ""
-        if isinstance(value, str):
-            return value
-        for attr in ("transcript", "text", "content"):
-            maybe = getattr(value, attr, None)
-            if isinstance(maybe, str) and maybe.strip():
-                return maybe
-        return str(value)
-
-    if not hasattr(session, "on"):
-        return
-
-    def _on_user(ev: Any = None, **kwargs: Any) -> None:
-        import asyncio
-
-        payload = ev if ev is not None else kwargs
-        text = _text_of(payload).strip()
-        if text:
-            asyncio.create_task(_publish_event({"type": "user_transcript", "text": text}))
-
-    def _on_agent(ev: Any = None, **kwargs: Any) -> None:
-        import asyncio
-
-        payload = ev if ev is not None else kwargs
-        text = _text_of(payload).strip()
-        if not text:
-            return
-        is_final = bool(getattr(payload, "is_final", getattr(payload, "final", False)))
-        asyncio.create_task(
-            _publish_event({"type": "agent_transcript", "text": text, "final": is_final})
-        )
-
-    for event_name, handler in (
-        ("user_input_transcribed", _on_user),
-        ("user_transcript", _on_user),
-        ("agent_speech_transcription", _on_agent),
-        ("agent_transcript", _on_agent),
-    ):
-        try:
-            session.on(event_name)(handler)
-        except Exception:
-            try:
-                session.on(event_name, handler)
-            except Exception:
-                pass
-
-
 INSTRUCTIONS = build_system_prompt(_DB_SCHEMA_SUMMARY)
 
 server = AgentServer()
@@ -420,6 +350,8 @@ async def entrypoint(ctx: JobContext):
 
     await ctx.connect()
     _active_room = ctx.room
+    set_active_room(ctx.room)
+    reset_email_flow(getattr(ctx.room, "name", None))
 
     if not API_KEY:
         raise RuntimeError("GEMINI_API_KEY or GOOGLE_API_KEY is required for Gemini Live.")
@@ -476,7 +408,13 @@ async def entrypoint(ctx: JobContext):
 
     agent = Agent(
         instructions=instructions,
-        tools=[*DB_FAST_PATH_TOOLS, run_custom_read_query, *TICKET_TOOLS, search_documents],
+        tools=[
+            *DB_FAST_PATH_TOOLS,
+            run_custom_read_query,
+            *TICKET_TOOLS,
+            search_documents,
+            *EMAIL_TOOLS,
+        ],
     )
 
     def _on_data_received(data: rtc.DataPacket) -> None:
@@ -495,7 +433,7 @@ async def entrypoint(ctx: JobContext):
 
     ctx.room.on("data_received", _on_data_received)
 
-    _wire_transcript_events(session)
+    wire_session_events(session, model_name=GEMINI_LIVE_MODEL)
     await session.start(agent=agent, room=ctx.room)
     # gemini-3.1-flash-live-preview rejects generate_reply / mid-session client content.
 

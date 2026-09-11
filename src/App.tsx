@@ -122,6 +122,7 @@ export default function App() {
   const isListeningRef = useRef(false);
   const lastSpokenUserUtterance = useRef<string>('');
   const openUserEventIdRef = useRef<string | null>(null);
+  const openAssistantEventIdRef = useRef<string | null>(null);
 
   const activeDocNames = documents.filter((d) => d.enabled).map((d) => d.name);
 
@@ -138,7 +139,7 @@ export default function App() {
           setAgentState('idle');
         }
       },
-      onUserTranscript: (text) => {
+      onUserTranscript: (text, isFinal) => {
         lastSpokenUserUtterance.current = text;
         setLiveTranscript(`You: ${text}`);
         setAgentState('listening');
@@ -157,10 +158,32 @@ export default function App() {
           openUserEventIdRef.current = ev.id;
           return [...prev, ev];
         });
+        if (isFinal) {
+          openUserEventIdRef.current = null;
+        }
       },
-      onModelTranscript: (text) => {
+      onModelTranscript: (text, isFinal) => {
         setLiveTranscript(`Natasha: ${text}`);
         setAgentState('speaking');
+
+        setVoiceEvents((prev) => {
+          const openId = openAssistantEventIdRef.current;
+          if (openId) {
+            const idx = prev.findIndex((e) => e.id === openId && e.kind === 'assistant');
+            if (idx >= 0) {
+              const next = [...prev];
+              next[idx] = { ...next[idx], text, timestamp: Date.now() };
+              return next;
+            }
+          }
+          const ev = makeVoiceEvent('assistant', text);
+          openAssistantEventIdRef.current = ev.id;
+          return [...prev, ev];
+        });
+        if (isFinal) {
+          // Finalized in-place; turn-complete must not append a duplicate.
+          openAssistantEventIdRef.current = null;
+        }
       },
       onModelActivity: (payload) => {
         const text = (payload.text || payload.tool || 'Model activity').trim();
@@ -180,6 +203,7 @@ export default function App() {
         openUserEventIdRef.current = null;
 
         const now = Date.now();
+        const trimmed = fullText.trim();
 
         // Ensure latest user utterance is recorded if we somehow missed streaming updates
         if (lastSpokenUserUtterance.current.trim()) {
@@ -192,12 +216,31 @@ export default function App() {
           });
         }
 
-        if (fullText.trim()) {
-          setVoiceEvents((prev) => [
-            ...prev,
-            makeVoiceEvent('assistant', fullText.trim(), { timestamp: now }),
-          ]);
+        if (!trimmed) {
+          openAssistantEventIdRef.current = null;
+          return;
         }
+
+        setVoiceEvents((prev) => {
+          const openId = openAssistantEventIdRef.current;
+          if (openId) {
+            const idx = prev.findIndex((e) => e.id === openId && e.kind === 'assistant');
+            if (idx >= 0) {
+              const next = [...prev];
+              next[idx] = { ...next[idx], text: trimmed, timestamp: now };
+              openAssistantEventIdRef.current = null;
+              return next;
+            }
+          }
+          // Already finalized via onModelTranscript(..., true) — do not duplicate.
+          const lastAssistant = [...prev].reverse().find((e) => e.kind === 'assistant');
+          if (lastAssistant && lastAssistant.text === trimmed) {
+            openAssistantEventIdRef.current = null;
+            return prev;
+          }
+          openAssistantEventIdRef.current = null;
+          return [...prev, makeVoiceEvent('assistant', trimmed, { timestamp: now })];
+        });
       },
       onVolumeChange: (inVol, outVol) => {
         setInputVolume(inVol);
@@ -269,6 +312,7 @@ export default function App() {
   const handleNewSession = () => {
     stopCurrentAudio();
     openUserEventIdRef.current = null;
+    openAssistantEventIdRef.current = null;
     lastSpokenUserUtterance.current = '';
     setVoiceEvents([
       makeVoiceEvent('assistant', INITIAL_GREETING, { id: 'init-greeting-' + Date.now() }),

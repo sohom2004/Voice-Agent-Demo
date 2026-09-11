@@ -51,6 +51,10 @@ class Settings:
         _ROOT / "demo_database.db",
     )
     app_url: str = os.getenv("APP_URL", "http://localhost:3000")
+    gmail_client_id: str = os.getenv("GMAIL_CLIENT_ID", "")
+    gmail_client_secret: str = os.getenv("GMAIL_CLIENT_SECRET", "")
+    gmail_refresh_token: str = os.getenv("GMAIL_REFRESH_TOKEN", "")
+    gmail_user_email: str = os.getenv("GMAIL_USER_EMAIL", "")
 
 
 settings = Settings()
