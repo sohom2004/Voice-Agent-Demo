@@ -54,6 +54,9 @@ class DocumentService:
             self.use_sqlite = True
         if self.use_sqlite:
             self._setup_sqlite_schema()
+        seeded = await self.ensure_demo_documents("default_workspace")
+        if seeded:
+            print(f"[DocumentService] Seeded {seeded} default demo policy document(s).")
 
     async def _setup_postgres_schema(self) -> None:
         assert self.pool is not None
@@ -358,6 +361,78 @@ class DocumentService:
             os.unlink(row["storage_path"])
         await self.pool.execute("DELETE FROM documents WHERE id = $1", doc_id)
         return True
+
+    async def ensure_demo_documents(self, workspace_id: str = "default_workspace") -> int:
+        """Load demo-docs/ into the workspace if those filenames are missing.
+
+        Does not delete user uploads. Returns the number of documents created.
+        """
+        if not SAMPLE_DOCUMENTS:
+            return 0
+        existing = await self.list_documents(workspace_id)
+        existing_names = {doc.get("name") for doc in existing}
+        created = 0
+        upload_dir = Path(settings.upload_dir)
+        upload_dir.mkdir(parents=True, exist_ok=True)
+        for sample in SAMPLE_DOCUMENTS:
+            name = sample["name"]
+            if name in existing_names:
+                continue
+            storage_path = str(upload_dir / f"demo_{name}")
+            Path(storage_path).write_text(sample["content"], encoding="utf-8")
+            doc = await self.create_document(
+                workspace_id,
+                name,
+                sample["type"],
+                storage_path,
+                len(sample["content"].encode("utf-8")),
+            )
+            await self._insert_plain_chunk(
+                workspace_id,
+                doc["id"],
+                name,
+                sample["content"],
+            )
+            created += 1
+        return created
+
+    async def _insert_plain_chunk(
+        self,
+        workspace_id: str,
+        document_id: str,
+        document_name: str,
+        content: str,
+    ) -> None:
+        """Keyword-searchable chunk so demo docs work before embeddings finish."""
+        chunk_id = f"chunk_{document_id}_seed"
+        if self.use_sqlite:
+            conn = self._sqlite_conn()
+            conn.execute(
+                """
+                INSERT OR REPLACE INTO document_chunks
+                (id, workspace_id, document_id, document_name, section_path, chunk_index, content, metadata, embedding)
+                VALUES (?, ?, ?, ?, '[]', 0, ?, '{}', NULL)
+                """,
+                (chunk_id, workspace_id, document_id, document_name, content),
+            )
+            conn.commit()
+            conn.close()
+            return
+        assert self.pool is not None
+        await self.pool.execute(
+            """
+            INSERT INTO document_chunks (
+              id, workspace_id, document_id, document_name, section_path,
+              chunk_index, content, metadata, embedding
+            ) VALUES ($1, $2, $3, $4, '{}'::text[], 0, $5, '{}'::jsonb, NULL)
+            ON CONFLICT (id) DO UPDATE SET content = EXCLUDED.content
+            """,
+            chunk_id,
+            workspace_id,
+            document_id,
+            document_name,
+            content,
+        )
 
     async def reset_samples(self, workspace_id: str) -> list[dict[str, Any]]:
         existing = await self.list_documents(workspace_id)

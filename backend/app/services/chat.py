@@ -47,10 +47,10 @@ def _audio_to_base64(data: Any) -> str | None:
 SEARCH_DOCUMENTS_TOOL = {
     "name": SEARCH_DOCUMENTS,
     "description": (
-        "Search the user's uploaded documents/files (reports, notes, policies, anything "
-        "they've uploaded) for information relevant to their question. Use this ONLY for "
-        "questions about uploaded documents — never for questions about live database "
-        "records, which have their own dedicated tools."
+        "Search the default medical-billing policy knowledge base and any extra uploaded "
+        "documents for information relevant to the question. Use this ONLY for policy, "
+        "procedure, or document questions — never for live database records, which have "
+        "their own dedicated tools."
     ),
     "parameters": {
         "type": "object",

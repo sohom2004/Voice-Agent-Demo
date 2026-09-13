@@ -264,9 +264,9 @@ doc_engine = DocRetrievalEngine(
 
 @function_tool
 async def search_documents(query: str) -> str:
-    """Search uploaded operational documents and billing policies for process
-    guidance. Use ONLY for policy/procedure questions — never for live
-    customer, claim, invoice, payment, or ticket record lookups."""
+    """Search the default billing policy knowledge base and any extra uploaded
+    operational documents. Use ONLY for policy/procedure questions — never for
+    live customer, claim, invoice, payment, or ticket record lookups."""
     await _publish_event(
         {
             "type": "model_activity",

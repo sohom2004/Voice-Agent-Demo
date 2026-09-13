@@ -13,7 +13,6 @@ import {
   RefreshCw 
 } from 'lucide-react';
 import { DocumentFile } from '../types';
-import { SAMPLE_DOCUMENTS } from '../data/sampleDocs';
 
 interface DocumentDrawerProps {
   isOpen: boolean;
@@ -189,7 +188,7 @@ export const DocumentDrawer: React.FC<DocumentDrawerProps> = ({
                 <FileText className="w-8 h-8 opacity-30 mx-auto mb-2" />
                 <p className="text-sm opacity-60 font-medium">No documents attached</p>
                 <p className="text-xs opacity-40 mt-1">
-                  Upload a file above or click below to load demo architecture notes.
+                  Demo billing policies load automatically. Upload extra files or reset the demo set.
                 </p>
                 <button
                   onClick={onResetSamples}
