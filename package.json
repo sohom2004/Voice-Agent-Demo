@@ -9,6 +9,8 @@
     "dev:backend": "cd backend && python -m uvicorn app.main:app --reload --host 0.0.0.0 --port 8000",
     "dev:voice-agent": "cd voice-agent && python agent.py dev",
     "init:demo-db": "python scripts/init_demo_database.py",
+    "migrate:postgres": "python scripts/migrate_sqlite_to_postgres.py --init-rag",
+    "verify:postgres": "python scripts/migrate_sqlite_to_postgres.py --verify",
     "test:demo": "python -m pytest sql-mcp/tests -q",
     "ingestion-worker": "npx tsx src/knowledge-ingestion/worker-run.ts",
     "build": "vite build",

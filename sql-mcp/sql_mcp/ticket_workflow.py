@@ -3,15 +3,17 @@
 These are business-level operations (not arbitrary SQL). They reuse the same
 confirmation philosophy as compiled write tools: mutations return
 confirmation_required until confirmed=true.
+
+Works against SQLite or PostgreSQL through SqlMcpEngine.
 """
 
 from __future__ import annotations
 
 import re
-import sqlite3
 from datetime import datetime, timezone
-from pathlib import Path
 from typing import Any
+
+from .models import ConnectionConfig
 
 VALID_CATEGORIES = {
     "billing_inquiry",
@@ -39,50 +41,75 @@ def _now() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
 
 
-def _connect(db_path: str | Path) -> sqlite3.Connection:
-    conn = sqlite3.connect(str(db_path))
-    conn.row_factory = sqlite3.Row
-    conn.execute("PRAGMA foreign_keys = ON")
-    return conn
+def _coerce_engine(target: Any):
+    from .engine import SqlMcpEngine
+
+    if isinstance(target, SqlMcpEngine):
+        return target
+    if isinstance(target, ConnectionConfig):
+        return SqlMcpEngine(target)
+    return SqlMcpEngine(
+        ConnectionConfig(dialect="sqlite", database=str(target)),
+    )
 
 
-def _row_to_dict(row: sqlite3.Row | None) -> dict[str, Any] | None:
+def _row(row: Any) -> dict[str, Any] | None:
     if row is None:
         return None
-    return dict(row)
+    if isinstance(row, dict):
+        return dict(row)
+    try:
+        return dict(row)
+    except Exception:
+        return None
 
 
-def _next_ticket_number(cur: sqlite3.Cursor) -> str:
+def _next_ticket_number(engine, cur) -> str:
+    ph = engine._placeholder()
+    tickets = engine._ident("tickets")
+    ticket_number = engine._ident("ticket_number")
     cur.execute(
+        f"""
+        SELECT {ticket_number} AS ticket_number FROM {tickets}
+        WHERE {ticket_number} LIKE 'TKT%'
+        ORDER BY length({ticket_number}::text) DESC, {ticket_number} DESC
+        LIMIT 1
         """
+        if engine.config.dialect == "postgres"
+        else f"""
         SELECT ticket_number FROM tickets
         WHERE ticket_number LIKE 'TKT%'
         ORDER BY length(ticket_number) DESC, ticket_number DESC
         LIMIT 1
         """
     )
-    row = cur.fetchone()
+    row = _row(cur.fetchone())
     if row is None:
         return "TKT10001"
-    match = re.search(r"(\d+)$", row["ticket_number"])
+    match = re.search(r"(\d+)$", str(row["ticket_number"]))
     if not match:
         return "TKT10001"
     return f"TKT{int(match.group(1)) + 1}"
 
 
 def check_ticket(
-    db_path: str | Path,
+    target: Any,
     ticket_number: str,
     include_recent_comments: bool = False,
 ) -> dict[str, Any]:
     if not ticket_number:
         return {"status": "error", "error": "ticket_number is required."}
 
-    conn = _connect(db_path)
+    engine = _coerce_engine(target)
+    ph = engine._placeholder()
+    conn = engine._get_connection()
     try:
         cur = conn.cursor()
-        cur.execute("SELECT * FROM tickets WHERE ticket_number = ?", [ticket_number])
-        ticket = _row_to_dict(cur.fetchone())
+        cur.execute(
+            f"SELECT * FROM {engine._ident('tickets')} WHERE {engine._ident('ticket_number')} = {ph}",
+            [ticket_number],
+        )
+        ticket = _row(cur.fetchone())
         if ticket is None:
             return {
                 "status": "not_found",
@@ -108,26 +135,28 @@ def check_ticket(
 
         if include_recent_comments:
             cur.execute(
-                """
-                SELECT author_type, author_name, comment, created_at
-                FROM ticket_comments
-                WHERE ticket_id = ?
-                ORDER BY comment_id DESC
+                f"""
+                SELECT author_type, author_name, {engine._ident('comment')} AS comment, created_at
+                FROM {engine._ident('ticket_comments')}
+                WHERE {engine._ident('ticket_id')} = {ph}
+                ORDER BY {engine._ident('comment_id')} DESC
                 LIMIT 3
                 """,
                 [ticket["ticket_id"]],
             )
-            comments = [dict(r) for r in cur.fetchall()]
+            comments = [_row(r) for r in cur.fetchall()]
             result["data"]["recent_comments"] = comments
             result["data"]["latest_comment"] = comments[0] if comments else None
 
         return result
-    finally:
-        conn.close()
+    except Exception as exc:
+        if engine._is_fatal_connection_error(exc):
+            engine._reset_connection()
+        return {"status": "error", "error": str(exc), "tool_used": "check_ticket"}
 
 
 def create_ticket(
-    db_path: str | Path,
+    target: Any,
     customer_id: int,
     category: str,
     subject: str,
@@ -152,7 +181,7 @@ def create_ticket(
             "status": "confirmation_required",
             "tool_used": "create_ticket",
             "message": "This change requires explicit user confirmation before it runs.",
-            "pending_change": f'create ticket with {pending}',
+            "pending_change": f"create ticket with {pending}",
         }
 
     if category not in VALID_CATEGORIES:
@@ -162,42 +191,59 @@ def create_ticket(
     if not subject or not description:
         return {"status": "error", "error": "subject and description are required."}
 
-    conn = _connect(db_path)
+    engine = _coerce_engine(target)
+    ph = engine._placeholder()
+    conn = engine._get_connection()
     try:
         cur = conn.cursor()
-        cur.execute("SELECT customer_id FROM customers WHERE customer_id = ?", [customer_id])
+        cur.execute(
+            f"SELECT {engine._ident('customer_id')} FROM {engine._ident('customers')} "
+            f"WHERE {engine._ident('customer_id')} = {ph}",
+            [customer_id],
+        )
         if cur.fetchone() is None:
             return {"status": "error", "error": f"Customer {customer_id} was not found."}
 
-        ticket_number = _next_ticket_number(cur)
+        ticket_number = _next_ticket_number(engine, cur)
         now = _now()
+        insert_sql = f"""
+            INSERT INTO {engine._ident('tickets')} (
+                {engine._ident('ticket_number')}, {engine._ident('customer_id')},
+                {engine._ident('category')}, {engine._ident('subject')},
+                {engine._ident('description')}, {engine._ident('priority')},
+                {engine._ident('status')}, {engine._ident('assigned_team')},
+                {engine._ident('assigned_agent')}, {engine._ident('resolution')},
+                {engine._ident('created_at')}, {engine._ident('updated_at')},
+                {engine._ident('closed_at')}
+            ) VALUES ({ph}, {ph}, {ph}, {ph}, {ph}, {ph}, 'open', {ph}, {ph}, NULL, {ph}, {ph}, NULL)
+        """
+        values = [
+            ticket_number,
+            customer_id,
+            category,
+            subject,
+            description,
+            priority,
+            assigned_team,
+            assigned_agent,
+            now,
+            now,
+        ]
+        if engine.config.dialect == "postgres":
+            cur.execute(insert_sql + " RETURNING ticket_id", values)
+            row = _row(cur.fetchone())
+            ticket_id = row["ticket_id"] if row else None
+        else:
+            cur.execute(insert_sql, values)
+            ticket_id = cur.lastrowid
+
         cur.execute(
-            """
-            INSERT INTO tickets (
-                ticket_number, customer_id, category, subject, description,
-                priority, status, assigned_team, assigned_agent, resolution,
-                created_at, updated_at, closed_at
-            ) VALUES (?, ?, ?, ?, ?, ?, 'open', ?, ?, NULL, ?, ?, NULL)
-            """,
-            [
-                ticket_number,
-                customer_id,
-                category,
-                subject,
-                description,
-                priority,
-                assigned_team,
-                assigned_agent,
-                now,
-                now,
-            ],
-        )
-        ticket_id = cur.lastrowid
-        cur.execute(
-            """
-            INSERT INTO ticket_comments (
-                ticket_id, author_type, author_name, comment, created_at
-            ) VALUES (?, 'system', 'System', ?, ?)
+            f"""
+            INSERT INTO {engine._ident('ticket_comments')} (
+                {engine._ident('ticket_id')}, {engine._ident('author_type')},
+                {engine._ident('author_name')}, {engine._ident('comment')},
+                {engine._ident('created_at')}
+            ) VALUES ({ph}, 'system', 'System', {ph}, {ph})
             """,
             [ticket_id, f"Ticket {ticket_number} created.", now],
         )
@@ -219,14 +265,17 @@ def create_ticket(
             },
         }
     except Exception as exc:
-        conn.rollback()
+        try:
+            conn.rollback()
+        except Exception:
+            pass
+        if engine._is_fatal_connection_error(exc):
+            engine._reset_connection()
         return {"status": "error", "error": str(exc), "tool_used": "create_ticket"}
-    finally:
-        conn.close()
 
 
 def update_ticket(
-    db_path: str | Path,
+    target: Any,
     ticket_number: str,
     *,
     status: str | None = None,
@@ -273,11 +322,16 @@ def update_ticket(
     if priority is not None and priority not in VALID_PRIORITIES:
         return {"status": "error", "error": f"Invalid priority: {priority}"}
 
-    conn = _connect(db_path)
+    engine = _coerce_engine(target)
+    ph = engine._placeholder()
+    conn = engine._get_connection()
     try:
         cur = conn.cursor()
-        cur.execute("SELECT * FROM tickets WHERE ticket_number = ?", [ticket_number])
-        ticket = _row_to_dict(cur.fetchone())
+        cur.execute(
+            f"SELECT * FROM {engine._ident('tickets')} WHERE {engine._ident('ticket_number')} = {ph}",
+            [ticket_number],
+        )
+        ticket = _row(cur.fetchone())
         if ticket is None:
             return {
                 "status": "not_found",
@@ -285,38 +339,44 @@ def update_ticket(
             }
 
         now = _now()
-        set_parts = ["updated_at = ?"]
+        set_parts = [f"{engine._ident('updated_at')} = {ph}"]
         values: list[Any] = [now]
 
         for field, value in updates.items():
-            set_parts.append(f"{field} = ?")
+            set_parts.append(f"{engine._ident(field)} = {ph}")
             values.append(value)
 
         if status in ("resolved", "closed"):
-            set_parts.append("closed_at = ?")
+            set_parts.append(f"{engine._ident('closed_at')} = {ph}")
             values.append(now)
         elif status is not None:
-            set_parts.append("closed_at = NULL")
+            set_parts.append(f"{engine._ident('closed_at')} = NULL")
 
         values.append(ticket_number)
         cur.execute(
-            f"UPDATE tickets SET {', '.join(set_parts)} WHERE ticket_number = ?",
+            f"UPDATE {engine._ident('tickets')} SET {', '.join(set_parts)} "
+            f"WHERE {engine._ident('ticket_number')} = {ph}",
             values,
         )
 
         if comment:
             cur.execute(
-                """
-                INSERT INTO ticket_comments (
-                    ticket_id, author_type, author_name, comment, created_at
-                ) VALUES (?, 'agent', ?, ?, ?)
+                f"""
+                INSERT INTO {engine._ident('ticket_comments')} (
+                    {engine._ident('ticket_id')}, {engine._ident('author_type')},
+                    {engine._ident('author_name')}, {engine._ident('comment')},
+                    {engine._ident('created_at')}
+                ) VALUES ({ph}, 'agent', {ph}, {ph}, {ph})
                 """,
                 [ticket["ticket_id"], comment_author_name, comment, now],
             )
 
         conn.commit()
-        cur.execute("SELECT * FROM tickets WHERE ticket_number = ?", [ticket_number])
-        updated = _row_to_dict(cur.fetchone())
+        cur.execute(
+            f"SELECT * FROM {engine._ident('tickets')} WHERE {engine._ident('ticket_number')} = {ph}",
+            [ticket_number],
+        )
+        updated = _row(cur.fetchone())
         return {
             "status": "ok",
             "tool_used": "update_ticket",
@@ -324,10 +384,13 @@ def update_ticket(
             "comment_added": bool(comment),
         }
     except Exception as exc:
-        conn.rollback()
+        try:
+            conn.rollback()
+        except Exception:
+            pass
+        if engine._is_fatal_connection_error(exc):
+            engine._reset_connection()
         return {"status": "error", "error": str(exc), "tool_used": "update_ticket"}
-    finally:
-        conn.close()
 
 
 TICKET_TOOL_DEFINITIONS = [
@@ -422,17 +485,17 @@ TICKET_TOOL_DEFINITIONS = [
 ]
 
 
-def dispatch_ticket_tool(db_path: str | Path, name: str, arguments: dict[str, Any]) -> dict[str, Any]:
+def dispatch_ticket_tool(target: Any, name: str, arguments: dict[str, Any]) -> dict[str, Any]:
     args = dict(arguments or {})
     if name == "check_ticket":
         return check_ticket(
-            db_path,
+            target,
             ticket_number=str(args.get("ticket_number", "")),
             include_recent_comments=bool(args.get("include_recent_comments", False)),
         )
     if name == "create_ticket":
         return create_ticket(
-            db_path,
+            target,
             customer_id=int(args["customer_id"]),
             category=str(args.get("category", "")),
             subject=str(args.get("subject", "")),
@@ -444,7 +507,7 @@ def dispatch_ticket_tool(db_path: str | Path, name: str, arguments: dict[str, An
         )
     if name == "update_ticket":
         return update_ticket(
-            db_path,
+            target,
             ticket_number=str(args.get("ticket_number", "")),
             status=args.get("status"),
             priority=args.get("priority"),

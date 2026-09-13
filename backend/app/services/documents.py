@@ -10,7 +10,7 @@ from typing import Any
 
 import asyncpg
 
-from ..config import settings
+from ..config import postgres_dsn, settings
 
 def _load_demo_docs() -> list[dict[str, str]]:
     docs_dir = Path(__file__).resolve().parents[3] / "demo-docs"
@@ -38,18 +38,26 @@ class DocumentService:
         Path(settings.upload_dir).mkdir(parents=True, exist_ok=True)
 
     async def connect(self) -> None:
+        production = os.getenv("RENDER") or settings.app_env.lower() in {"production", "prod"}
         try:
-            self.pool = await asyncpg.create_pool(
-                host=settings.pg_host,
-                port=settings.pg_port,
-                user=settings.pg_user,
-                password=settings.pg_password,
-                database=settings.pg_database,
-                timeout=3,
-            )
+            if settings.pg_dsn:
+                self.pool = await asyncpg.create_pool(dsn=postgres_dsn(settings.pg_dsn), timeout=3)
+            else:
+                self.pool = await asyncpg.create_pool(
+                    host=settings.pg_host,
+                    port=settings.pg_port,
+                    user=settings.pg_user,
+                    password=settings.pg_password or None,
+                    database=settings.pg_database,
+                    timeout=3,
+                )
             await self._setup_postgres_schema()
             self.use_sqlite = False
         except Exception as exc:
+            if production:
+                raise RuntimeError(
+                    f"PostgreSQL is required in production for document/RAG storage: {exc}"
+                ) from exc
             print(f"[DocumentService] PostgreSQL unavailable ({exc}); using SQLite fallback.")
             self.use_sqlite = True
         if self.use_sqlite:

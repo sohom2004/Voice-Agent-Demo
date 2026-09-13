@@ -4,28 +4,21 @@ from __future__ import annotations
 
 import asyncio
 import json
-import os
+from pathlib import Path
 from typing import Any
 
+from dotenv import load_dotenv
 from mcp.server import Server
 from mcp.server.stdio import stdio_server
 from mcp.types import TextContent, Tool
+
+load_dotenv(Path(__file__).resolve().parents[2] / ".env")
 
 from .engine import SqlMcpEngine
 from .models import ConnectionConfig
 
 server = Server("sql-mcp")
-engine = SqlMcpEngine(
-    ConnectionConfig(
-        tenant_id=os.getenv("SQL_MCP_TENANT_ID", "default_tenant"),
-        dialect=os.getenv("SQL_MCP_DIALECT", "sqlite"),
-        host=os.getenv("SQL_MCP_HOST", "localhost"),
-        port=int(os.getenv("SQL_MCP_PORT", "5432")),
-        user=os.getenv("SQL_MCP_USER", "postgres"),
-        password=os.getenv("SQL_MCP_PASSWORD", "postgres"),
-        database=os.getenv("SQL_MCP_DATABASE", "demo_database.db"),
-    )
-)
+engine = SqlMcpEngine(ConnectionConfig.from_env())
 
 
 def _tool_defs() -> list[Tool]:

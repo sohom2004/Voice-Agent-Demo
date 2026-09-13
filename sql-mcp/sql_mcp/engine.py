@@ -95,18 +95,43 @@ class SqlMcpEngine:
         conn.execute("PRAGMA foreign_keys = ON")
         return conn
 
+    def _postgres_schema(self) -> str:
+        return (self.config.schema_name or "public").strip() or "public"
+
+    def _ident(self, name: str) -> str:
+        if self.config.dialect == "postgres":
+            return '"' + str(name).replace('"', '""') + '"'
+        if self.config.dialect == "mysql":
+            return "`" + str(name).replace("`", "``") + "`"
+        return str(name)
+
+    def _configure_postgres(self, conn) -> None:
+        schema = self._postgres_schema()
+        cur = conn.cursor()
+        cur.execute(f"SET search_path TO {self._ident(schema)}")
+        cur.close()
+
     def _connect_postgres(self):
         import psycopg2
         from psycopg2.extras import RealDictCursor
+        from .models import postgres_dsn
 
-        return psycopg2.connect(
-            host=self.config.host,
-            port=self.config.port,
-            user=self.config.user,
-            password=self.config.password,
-            dbname=self.config.database,
-            cursor_factory=RealDictCursor,
-        )
+        if self.config.connection_url:
+            conn = psycopg2.connect(
+                postgres_dsn(self.config.connection_url),
+                cursor_factory=RealDictCursor,
+            )
+        else:
+            conn = psycopg2.connect(
+                host=self.config.host,
+                port=self.config.port,
+                user=self.config.user,
+                password=self.config.password or None,
+                dbname=self.config.database,
+                cursor_factory=RealDictCursor,
+            )
+        self._configure_postgres(conn)
+        return conn
 
     def _connect_mysql(self):
         import pymysql
@@ -123,6 +148,7 @@ class SqlMcpEngine:
         )
 
     def _open_connection(self):
+        self.config.reject_sqlite_in_production()
         if self.config.dialect == "sqlite":
             return self._connect_sqlite()
         if self.config.dialect == "postgres":
@@ -223,9 +249,10 @@ class SqlMcpEngine:
                 """
                 SELECT table_name
                 FROM information_schema.tables
-                WHERE table_schema = 'public' AND table_type = 'BASE TABLE'
+                WHERE table_schema = %s AND table_type = 'BASE TABLE'
                 ORDER BY table_name
-                """
+                """,
+                (self._postgres_schema(),),
             )
             return [row["table_name"] for row in cur.fetchall()]
         except Exception as exc:
@@ -285,10 +312,10 @@ class SqlMcpEngine:
             """
             SELECT column_name, data_type, is_nullable
             FROM information_schema.columns
-            WHERE table_schema = 'public' AND table_name = %s
+            WHERE table_schema = %s AND table_name = %s
             ORDER BY ordinal_position
             """,
-            (table_name,),
+            (self._postgres_schema(), table_name),
         )
         col_rows = cur.fetchall()
 
@@ -302,10 +329,10 @@ class SqlMcpEngine:
                   ON tc.constraint_name = kcu.constraint_name
                  AND tc.table_schema = kcu.table_schema
                 WHERE tc.constraint_type = 'PRIMARY KEY'
-                  AND tc.table_schema = 'public'
+                  AND tc.table_schema = %s
                   AND tc.table_name = %s
                 """,
-                (table_name,),
+                (self._postgres_schema(), table_name),
             )
             for row in cur.fetchall():
                 pk_cols.add(row["column_name"])
@@ -328,10 +355,10 @@ class SqlMcpEngine:
                   ON ccu.constraint_name = tc.constraint_name
                  AND ccu.table_schema = tc.table_schema
                 WHERE tc.constraint_type = 'FOREIGN KEY'
-                  AND tc.table_schema = 'public'
+                  AND tc.table_schema = %s
                   AND tc.table_name = %s
                 """,
-                (table_name,),
+                (self._postgres_schema(), table_name),
             )
             for row in cur.fetchall():
                 fk_map[row["column_name"]] = (row["references_table"], row["references_column"])
@@ -416,6 +443,10 @@ class SqlMcpEngine:
                 )
             )
         return TableMeta(name=table_name, columns=columns)
+
+    def has_ticket_tables(self) -> bool:
+        names = {name.lower() for name in self.list_tables()}
+        return {"tickets", "customers", "ticket_comments"}.issubset(names)
 
     def get_schema_snapshot(self) -> SchemaSnapshot:
         tables = []
@@ -533,7 +564,7 @@ class SqlMcpEngine:
         values: list[Any] = []
         for p in params:
             if arguments.get(p.name) is not None:
-                clauses.append(f"{p.name} = {ph}")
+                clauses.append(f"{self._ident(p.name)} = {ph}")
                 values.append(arguments[p.name])
         where_sql = f" WHERE {' AND '.join(clauses)}" if clauses else ""
         return where_sql, values
@@ -563,7 +594,7 @@ class SqlMcpEngine:
             if not row:
                 return None
             pk_name = row["column_name"] if isinstance(row, dict) else row[0]
-            cur.execute(f"SELECT * FROM {table} WHERE {pk_name} = {ph}", [lastrowid])
+            cur.execute(f"SELECT * FROM {self._ident(table)} WHERE {self._ident(pk_name)} = {ph}", [lastrowid])
             fetched = cur.fetchone()
             if fetched is None:
                 return None
@@ -592,7 +623,10 @@ class SqlMcpEngine:
 
             if tool.operation == "get_by_id":
                 pk = tool.params[0]
-                cur.execute(f"SELECT * FROM {tool.table} WHERE {pk.name} = {ph} LIMIT 1", [arguments[pk.name]])
+                cur.execute(
+                    f"SELECT * FROM {self._ident(tool.table)} WHERE {self._ident(pk.name)} = {ph} LIMIT 1",
+                    [arguments[pk.name]],
+                )
                 row = cur.fetchone()
                 rows = self._rows_to_dicts([row] if row is not None else [])
                 data = rows[0] if rows else None
@@ -600,13 +634,13 @@ class SqlMcpEngine:
 
             if tool.operation == "list":
                 where_sql, values = self._build_filters(tool.params, arguments, ph)
-                cur.execute(f"SELECT * FROM {tool.table}{where_sql} LIMIT {READ_ROW_LIMIT}", values)
+                cur.execute(f"SELECT * FROM {self._ident(tool.table)}{where_sql} LIMIT {READ_ROW_LIMIT}", values)
                 rows = self._rows_to_dicts(cur.fetchall())
                 return {"status": "ok", "data": rows, "row_count": len(rows), "tool_used": tool.name}
 
             if tool.operation == "count":
                 where_sql, values = self._build_filters(tool.params, arguments, ph)
-                cur.execute(f"SELECT COUNT(*) as count FROM {tool.table}{where_sql}", values)
+                cur.execute(f"SELECT COUNT(*) as count FROM {self._ident(tool.table)}{where_sql}", values)
                 row = cur.fetchone()
                 count_val = self._rows_to_dicts([row])[0]["count"] if row is not None else 0
                 return {"status": "ok", "data": {"count": count_val}, "tool_used": tool.name}
@@ -616,29 +650,29 @@ class SqlMcpEngine:
                 if not columns:
                     return {"status": "error", "error": "No fields provided to insert.", "tool_used": tool.name}
                 values = [arguments[c] for c in columns]
-                col_sql = ", ".join(columns)
+                col_sql = ", ".join(self._ident(c) for c in columns)
                 placeholders = ", ".join([ph] * len(columns))
 
                 if self.config.dialect == "postgres":
                     cur.execute(
-                        f"INSERT INTO {tool.table} ({col_sql}) VALUES ({placeholders}) RETURNING *",
+                        f"INSERT INTO {self._ident(tool.table)} ({col_sql}) VALUES ({placeholders}) RETURNING *",
                         values,
                     )
                     row = cur.fetchone()
                     conn.commit()
                     inserted = self._rows_to_dicts([row])[0] if row else dict(zip(columns, values))
                 elif self.config.dialect == "sqlite":
-                    cur.execute(f"INSERT INTO {tool.table} ({col_sql}) VALUES ({placeholders})", values)
+                    cur.execute(f"INSERT INTO {self._ident(tool.table)} ({col_sql}) VALUES ({placeholders})", values)
                     conn.commit()
                     inserted = dict(zip(columns, values))
                     if cur.lastrowid is not None:
-                        cur.execute(f"SELECT * FROM {tool.table} WHERE rowid = ?", [cur.lastrowid])
+                        cur.execute(f"SELECT * FROM {self._ident(tool.table)} WHERE rowid = ?", [cur.lastrowid])
                         row = cur.fetchone()
                         if row is not None:
                             inserted = self._rows_to_dicts([row])[0]
                 else:
                     # MySQL — no RETURNING; re-select via lastrowid when possible.
-                    cur.execute(f"INSERT INTO {tool.table} ({col_sql}) VALUES ({placeholders})", values)
+                    cur.execute(f"INSERT INTO {self._ident(tool.table)} ({col_sql}) VALUES ({placeholders})", values)
                     conn.commit()
                     inserted = dict(zip(columns, values))
                     lastrowid = getattr(cur, "lastrowid", None)
@@ -653,29 +687,36 @@ class SqlMcpEngine:
                 set_columns = [p.name for p in tool.params[1:] if p.name in arguments]
                 if not set_columns:
                     return {"status": "error", "error": "No fields to update were provided", "tool_used": tool.name}
-                set_sql = ", ".join(f"{c} = {ph}" for c in set_columns)
+                set_sql = ", ".join(f"{self._ident(c)} = {ph}" for c in set_columns)
                 values = [arguments[c] for c in set_columns] + [arguments[pk.name]]
 
                 if self.config.dialect == "postgres":
                     cur.execute(
-                        f"UPDATE {tool.table} SET {set_sql} WHERE {pk.name} = {ph} RETURNING *", values
+                        f"UPDATE {self._ident(tool.table)} SET {set_sql} WHERE {self._ident(pk.name)} = {ph} RETURNING *",
+                        values,
                     )
                     row = cur.fetchone()
                     conn.commit()
                     data = self._rows_to_dicts([row])[0] if row else None
                     return {"status": "ok", "data": data, "row_count": cur.rowcount, "tool_used": tool.name}
 
-                cur.execute(f"UPDATE {tool.table} SET {set_sql} WHERE {pk.name} = {ph}", values)
+                cur.execute(f"UPDATE {self._ident(tool.table)} SET {set_sql} WHERE {self._ident(pk.name)} = {ph}", values)
                 updated_rows = cur.rowcount
                 conn.commit()
-                cur.execute(f"SELECT * FROM {tool.table} WHERE {pk.name} = {ph}", [arguments[pk.name]])
+                cur.execute(
+                    f"SELECT * FROM {self._ident(tool.table)} WHERE {self._ident(pk.name)} = {ph}",
+                    [arguments[pk.name]],
+                )
                 row = cur.fetchone()
                 data = self._rows_to_dicts([row])[0] if row else None
                 return {"status": "ok", "data": data, "row_count": updated_rows, "tool_used": tool.name}
 
             if tool.operation == "delete_by_id":
                 pk = tool.params[0]
-                cur.execute(f"DELETE FROM {tool.table} WHERE {pk.name} = {ph}", [arguments[pk.name]])
+                cur.execute(
+                    f"DELETE FROM {self._ident(tool.table)} WHERE {self._ident(pk.name)} = {ph}",
+                    [arguments[pk.name]],
+                )
                 deleted_rows = cur.rowcount
                 conn.commit()
                 return {"status": "ok", "row_count": deleted_rows, "tool_used": tool.name}

@@ -1,0 +1,65 @@
+databases:
+  - name: voice-agent-db
+    region: singapore
+    databaseName: voice_agent
+    user: voice_agent
+    postgresMajorVersion: 16
+
+services:
+  - type: web
+    name: voice-agent-web
+    runtime: docker
+    region: singapore
+    dockerfilePath: ./Dockerfile
+    healthCheckPath: /api/health
+    envVars:
+      - key: DATABASE_URL
+        fromDatabase:
+          name: voice-agent-db
+          property: connectionString
+      - key: APP_ENV
+        value: production
+      - key: SQL_MCP_DIALECT
+        value: postgresql
+      - key: SQL_MCP_SCHEMA
+        value: business
+      - key: GEMINI_API_KEY
+        sync: false
+      - key: GOOGLE_API_KEY
+        sync: false
+      - key: LIVEKIT_URL
+        sync: false
+      - key: LIVEKIT_API_KEY
+        sync: false
+      - key: LIVEKIT_API_SECRET
+        sync: false
+      - key: APP_URL
+        sync: false
+
+  - type: worker
+    name: voice-agent-livekit
+    runtime: docker
+    region: singapore
+    dockerfilePath: ./Dockerfile
+    dockerCommand: sh -c "python scripts/migrate_sqlite_to_postgres.py --init-rag && python voice-agent/agent.py start"
+    envVars:
+      - key: DATABASE_URL
+        fromDatabase:
+          name: voice-agent-db
+          property: connectionString
+      - key: APP_ENV
+        value: production
+      - key: SQL_MCP_DIALECT
+        value: postgresql
+      - key: SQL_MCP_SCHEMA
+        value: business
+      - key: GEMINI_API_KEY
+        sync: false
+      - key: GOOGLE_API_KEY
+        sync: false
+      - key: LIVEKIT_URL
+        sync: false
+      - key: LIVEKIT_API_KEY
+        sync: false
+      - key: LIVEKIT_API_SECRET
+        sync: false

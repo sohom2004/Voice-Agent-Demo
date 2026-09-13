@@ -1,0 +1,16 @@
+node_modules
+.git
+.venv
+.env
+.env.*
+!.env.example
+uploads
+.sqlmcp
+dist
+__pycache__
+*.pyc
+.pytest_cache
+.idea
+.vscode
+scratch
+agent-transcripts

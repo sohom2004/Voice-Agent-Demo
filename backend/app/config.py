@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 from dataclasses import dataclass
 from pathlib import Path
+from urllib.parse import unquote, urlparse
 
 from dotenv import load_dotenv
 
@@ -28,29 +29,70 @@ def _resolve_path(value: str, default: Path) -> str:
     return str(path)
 
 
+def postgres_dsn(url: str) -> str:
+    raw = (url or "").strip()
+    if raw.startswith("postgres://"):
+        return "postgresql://" + raw[len("postgres://") :]
+    return raw
+
+
+def _parse_database_url(url: str) -> dict[str, str]:
+    parsed = urlparse(url.strip())
+    return {
+        "host": parsed.hostname or "localhost",
+        "port": str(parsed.port or 5432),
+        "user": unquote(parsed.username or "postgres"),
+        "password": unquote(parsed.password or ""),
+        "database": unquote((parsed.path or "").lstrip("/") or "voice_agent"),
+        "dsn": url.strip(),
+    }
+
+
+def _pg_from_env() -> dict[str, str]:
+    url = (os.getenv("DATABASE_URL") or "").strip()
+    if url and not url.lower().startswith("sqlite"):
+        return _parse_database_url(url)
+    return {
+        "host": os.getenv("PGHOST", "localhost"),
+        "port": os.getenv("PGPORT", "5432"),
+        "user": os.getenv("PGUSER", "postgres"),
+        "password": os.getenv("PGPASSWORD", ""),
+        "database": os.getenv("PGDATABASE", "voice_agent"),
+        "dsn": "",
+    }
+
+
+_pg = _pg_from_env()
+_sql_dialect = (os.getenv("SQL_MCP_DIALECT") or "").strip() or (
+    "postgresql" if (os.getenv("DATABASE_URL") or os.getenv("SQL_MCP_DATABASE_URL")) else "postgresql"
+)
+
+
 @dataclass
 class Settings:
     gemini_api_key: str = os.getenv("GEMINI_API_KEY", "") or os.getenv("GOOGLE_API_KEY", "")
     google_api_key: str = os.getenv("GOOGLE_API_KEY", "") or os.getenv("GEMINI_API_KEY", "")
-    pg_host: str = os.getenv("PGHOST", "localhost")
-    pg_port: int = int(os.getenv("PGPORT", "5432"))
-    pg_user: str = os.getenv("PGUSER", "postgres")
-    pg_password: str = os.getenv("PGPASSWORD", "")
-    pg_database: str = os.getenv("PGDATABASE", "postgres")
+    database_url: str = (os.getenv("DATABASE_URL") or os.getenv("SQL_MCP_DATABASE_URL") or "").strip()
+    pg_host: str = _pg["host"]
+    pg_port: int = int(_pg["port"] or "5432")
+    pg_user: str = _pg["user"]
+    pg_password: str = _pg["password"]
+    pg_database: str = _pg["database"]
+    pg_dsn: str = _pg["dsn"]
     upload_dir: str = _resolve_path(os.getenv("UPLOAD_DIR", ""), _ROOT / "uploads")
     livekit_url: str = os.getenv("LIVEKIT_URL", "")
     livekit_api_key: str = os.getenv("LIVEKIT_API_KEY", "")
     livekit_api_secret: str = os.getenv("LIVEKIT_API_SECRET", "")
-    sql_mcp_dialect: str = os.getenv("SQL_MCP_DIALECT", "sqlite")
-    sql_mcp_host: str = os.getenv("SQL_MCP_HOST", "localhost")
-    sql_mcp_port: int = int(os.getenv("SQL_MCP_PORT", "5432"))
-    sql_mcp_user: str = os.getenv("SQL_MCP_USER", "postgres")
-    sql_mcp_password: str = os.getenv("SQL_MCP_PASSWORD", "postgres")
-    sql_mcp_database: str = _resolve_path(
-        os.getenv("SQL_MCP_DATABASE", ""),
-        _ROOT / "demo_database.db",
-    )
+    sql_mcp_dialect: str = _sql_dialect
+    sql_mcp_host: str = os.getenv("SQL_MCP_HOST") or _pg["host"]
+    sql_mcp_port: int = int(os.getenv("SQL_MCP_PORT") or _pg["port"] or "5432")
+    sql_mcp_user: str = os.getenv("SQL_MCP_USER") or _pg["user"]
+    sql_mcp_password: str = os.getenv("SQL_MCP_PASSWORD") or _pg["password"]
+    sql_mcp_database: str = os.getenv("SQL_MCP_DATABASE") or _pg["database"]
+    sql_mcp_schema: str = os.getenv("SQL_MCP_SCHEMA", "business")
+    sql_mcp_database_url: str = (os.getenv("SQL_MCP_DATABASE_URL") or os.getenv("DATABASE_URL") or "").strip()
     app_url: str = os.getenv("APP_URL", "http://localhost:3000")
+    app_env: str = os.getenv("APP_ENV", "development")
     gmail_client_id: str = os.getenv("GMAIL_CLIENT_ID", "")
     gmail_client_secret: str = os.getenv("GMAIL_CLIENT_SECRET", "")
     gmail_refresh_token: str = os.getenv("GMAIL_REFRESH_TOKEN", "")

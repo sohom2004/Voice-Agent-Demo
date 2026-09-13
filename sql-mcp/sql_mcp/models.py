@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from dataclasses import asdict, dataclass, field
 from typing import Any, Literal
 from urllib.parse import unquote, urlparse
@@ -8,6 +9,7 @@ from urllib.parse import unquote, urlparse
 Dialect = Literal["postgres", "mysql", "sqlite"]
 
 _DEMO_SQLITE_NAMES = {"demo_database.db", "./demo_database.db"}
+DEFAULT_BUSINESS_SCHEMA = "business"
 
 
 @dataclass
@@ -26,6 +28,7 @@ class ConnectionConfig:
     password: str = "postgres"
     database: str = "demo_database.db"
     connection_url: str | None = None
+    schema_name: str | None = None
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> "ConnectionConfig":
@@ -45,20 +48,87 @@ class ConnectionConfig:
             or raw.get("connectionString")
             or raw.get("connection_string")
         )
+        dialect_default = "postgres" if connection_url else "sqlite"
+        schema_name = (
+            raw.get("schemaName")
+            or raw.get("schema_name")
+            or raw.get("schema")
+            or raw.get("searchPath")
+        )
         cfg = cls(
             tenant_id=str(tenant_id),
-            dialect=_normalize_dialect(raw.get("dialect", "sqlite")),
+            dialect=_normalize_dialect(raw.get("dialect", dialect_default)),
             host=raw.get("host", "localhost"),
             port=int(raw.get("port", 5432) or 5432),
             user=raw.get("user", "postgres"),
             password=raw.get("password", "postgres"),
             database=raw.get("database", "demo_database.db"),
             connection_url=connection_url,
+            schema_name=str(schema_name) if schema_name else None,
         )
         if connection_url:
             cfg = cfg.merge_url(connection_url)
             cfg.tenant_id = str(tenant_id)
+            if schema_name:
+                cfg.schema_name = str(schema_name)
         return cfg
+
+    @classmethod
+    def from_env(cls, tenant_id: str = "default_tenant") -> "ConnectionConfig":
+        """Build config from DATABASE_URL / SQL_MCP_* environment variables."""
+        url = (
+            os.getenv("SQL_MCP_DATABASE_URL")
+            or os.getenv("DATABASE_URL")
+            or ""
+        ).strip()
+        schema = (os.getenv("SQL_MCP_SCHEMA") or "").strip() or DEFAULT_BUSINESS_SCHEMA
+        dialect_env = (os.getenv("SQL_MCP_DIALECT") or "").strip()
+
+        if url and not url.lower().startswith("sqlite"):
+            cfg = cls.from_dict(
+                {
+                    "tenantId": tenant_id,
+                    "connectionUrl": url,
+                    "schemaName": schema,
+                    "dialect": dialect_env or "postgres",
+                }
+            )
+            cfg.reject_sqlite_in_production()
+            return cfg
+
+        dialect = _normalize_dialect(dialect_env or "postgres")
+        if dialect == "sqlite":
+            database = os.getenv("SQL_MCP_DATABASE", "demo_database.db")
+            cfg = cls(
+                tenant_id=tenant_id,
+                dialect="sqlite",
+                database=database,
+            )
+            cfg.reject_sqlite_in_production()
+            return cfg
+
+        cfg = cls(
+            tenant_id=tenant_id,
+            dialect=dialect,
+            host=os.getenv("SQL_MCP_HOST") or os.getenv("PGHOST") or "localhost",
+            port=int(os.getenv("SQL_MCP_PORT") or os.getenv("PGPORT") or "5432"),
+            user=os.getenv("SQL_MCP_USER") or os.getenv("PGUSER") or "postgres",
+            password=os.getenv("SQL_MCP_PASSWORD") or os.getenv("PGPASSWORD") or "",
+            database=os.getenv("SQL_MCP_DATABASE") or os.getenv("PGDATABASE") or "voice_agent",
+            schema_name=schema,
+        )
+        cfg.reject_sqlite_in_production()
+        return cfg
+
+    def reject_sqlite_in_production(self) -> None:
+        if self.dialect != "sqlite":
+            return
+        if not is_production_environment():
+            return
+        raise RuntimeError(
+            "SQLite is not allowed in production. Set DATABASE_URL to the "
+            "Render internal PostgreSQL URL (or SQL_MCP_DIALECT=postgresql)."
+        )
 
     def merge_url(self, url: str) -> "ConnectionConfig":
         parsed = _parse_connection_url(url)
@@ -71,6 +141,7 @@ class ConnectionConfig:
             password=parsed.get("password", self.password),
             database=parsed.get("database", self.database),
             connection_url=url,
+            schema_name=self.schema_name,
         )
 
     def is_demo_sqlite(self) -> bool:
@@ -88,6 +159,7 @@ class ConnectionConfig:
             "port": self.port if self.dialect != "sqlite" else None,
             "user": self.user if self.dialect != "sqlite" else None,
             "database": self.database,
+            "schema": self.schema_name,
             "hasPassword": bool(self.password),
             "connectionUrlConfigured": bool(self.connection_url),
         }
@@ -103,11 +175,25 @@ class ConnectionConfig:
             "password": self.password,
             "database": self.database,
             "connectionUrl": self.connection_url,
+            "schemaName": self.schema_name,
         }
 
 
+def is_production_environment() -> bool:
+    if os.getenv("RENDER"):
+        return True
+    return os.getenv("APP_ENV", "").strip().lower() in {"production", "prod"}
+
+
+def postgres_dsn(url: str) -> str:
+    raw = (url or "").strip()
+    if raw.startswith("postgres://"):
+        return "postgresql://" + raw[len("postgres://") :]
+    return raw
+
+
 def _normalize_dialect(value: Any) -> Dialect:
-    raw = str(value or "sqlite").strip().lower()
+    raw = str(value or "postgres").strip().lower()
     if raw in {"postgres", "postgresql", "pg"}:
         return "postgres"
     if raw in {"mysql", "mariadb"}:

@@ -18,7 +18,6 @@ from sql_mcp.manifest import to_raw_schema
 from sql_mcp.models import ConnectionConfig, redact_secrets
 from sql_mcp.ticket_workflow import TICKET_TOOL_DEFINITIONS, dispatch_ticket_tool
 
-from ..config import settings
 from .connection_registry import (
     clear_persisted_connection,
     get_active_config_for_voice,
@@ -71,15 +70,7 @@ class SqlMcpService:
         self._lock = asyncio.Lock()
 
     def _default_config(self, tenant_id: str) -> ConnectionConfig:
-        return ConnectionConfig(
-            tenant_id=tenant_id,
-            dialect=settings.sql_mcp_dialect,  # type: ignore[arg-type]
-            host=settings.sql_mcp_host,
-            port=settings.sql_mcp_port,
-            user=settings.sql_mcp_user,
-            password=settings.sql_mcp_password,
-            database=settings.sql_mcp_database,
-        )
+        return ConnectionConfig.from_env(tenant_id)
 
     def _config_from_payload(self, tenant_id: str, config: dict[str, Any] | None) -> ConnectionConfig:
         return ConnectionConfig.from_dict({**(config or {}), "tenantId": tenant_id})
@@ -362,7 +353,10 @@ class SqlMcpService:
         }
 
     def _include_ticket_tools(self, engine: SqlMcpEngine) -> bool:
-        return engine.config.dialect == "sqlite"
+        try:
+            return engine.has_ticket_tables()
+        except Exception:
+            return False
 
     def _manifest_tool_defs(self, engine: SqlMcpEngine) -> list[dict]:
         """Compiled fast-path tools in {name, description, input_schema} shape.
@@ -456,16 +450,13 @@ class SqlMcpService:
         if tool_name == RUN_CUSTOM_READ_QUERY:
             result = engine.execute_read(args.get("sql", ""))
         elif tool_name in TICKET_TOOL_NAMES:
-            if engine.config.dialect != "sqlite":
+            if not engine.has_ticket_tables():
                 result = {
                     "status": "error",
-                    "error": (
-                        "Ticket tools require a SQLite database connection "
-                        f"(current dialect: {engine.config.dialect})."
-                    ),
+                    "error": "Ticket tools require tickets/customers tables on the connected database.",
                 }
             else:
-                result = dispatch_ticket_tool(engine.config.database, tool_name, args)
+                result = dispatch_ticket_tool(engine, tool_name, args)
         else:
             # call_manifest_tool compiles only if manifest is missing.
             result = engine.call_manifest_tool(tool_name, args)

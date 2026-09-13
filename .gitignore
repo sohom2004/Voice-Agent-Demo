@@ -15,6 +15,7 @@ __pycache__/
 
 # Local databases
 *.db
+!demo_database.db
 !uploads/.gitkeep
 
 # Server-local sql-mcp active connections (may contain secrets)

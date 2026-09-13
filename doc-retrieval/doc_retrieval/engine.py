@@ -145,15 +145,22 @@ class DocRetrievalEngine:
         import psycopg2
         from psycopg2.extras import RealDictCursor
 
-        conn = psycopg2.connect(
-            host=self.config.pg_host,
-            port=self.config.pg_port,
-            user=self.config.pg_user,
-            password=self.config.pg_password or None,
-            dbname=self.config.pg_database,
-            cursor_factory=RealDictCursor,
-            connect_timeout=3,
-        )
+        dsn = getattr(self.config, "pg_dsn", "") or ""
+        if dsn:
+            url = dsn
+            if url.startswith("postgres://"):
+                url = "postgresql://" + url[len("postgres://") :]
+            conn = psycopg2.connect(url, cursor_factory=RealDictCursor, connect_timeout=3)
+        else:
+            conn = psycopg2.connect(
+                host=self.config.pg_host,
+                port=self.config.pg_port,
+                user=self.config.pg_user,
+                password=self.config.pg_password or None,
+                dbname=self.config.pg_database,
+                cursor_factory=RealDictCursor,
+                connect_timeout=3,
+            )
         try:
             cur = conn.cursor()
             if document_ids:

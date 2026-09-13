@@ -73,15 +73,10 @@ def _resolve_db_path(raw: str) -> str:
 
 
 def _env_connection_config(tenant_id: str = DEFAULT_TENANT_ID) -> ConnectionConfig:
-    return ConnectionConfig(
-        tenant_id=tenant_id,
-        dialect=os.getenv("SQL_MCP_DIALECT", "sqlite"),  # type: ignore[arg-type]
-        host=os.getenv("SQL_MCP_HOST", "localhost"),
-        port=int(os.getenv("SQL_MCP_PORT", "5432")),
-        user=os.getenv("SQL_MCP_USER", "postgres"),
-        password=os.getenv("SQL_MCP_PASSWORD", "postgres"),
-        database=_resolve_db_path(os.getenv("SQL_MCP_DATABASE", "demo_database.db")),
-    )
+    cfg = ConnectionConfig.from_env(tenant_id)
+    if cfg.dialect == "sqlite":
+        cfg.database = _resolve_db_path(cfg.database)
+    return cfg
 
 
 def _load_connection_config(tenant_id: str = DEFAULT_TENANT_ID) -> ConnectionConfig:
@@ -213,7 +208,7 @@ def _make_ticket_tool(tool_def: dict[str, Any]):
                 "text": _activity_label(tool_name, "start"),
             }
         )
-        result = dispatch_ticket_tool(_db_path, tool_name, raw_arguments or {})
+        result = dispatch_ticket_tool(engine, tool_name, raw_arguments or {})
         await _publish_event(
             {
                 "type": "model_activity",
@@ -304,8 +299,9 @@ def _configs_match(a: ConnectionConfig, b: ConnectionConfig) -> bool:
         and a.port == b.port
         and a.user == b.user
         and a.password == b.password
-        and a.database == b.database
+        and         a.database == b.database
         and (a.connection_url or None) == (b.connection_url or None)
+        and (a.schema_name or None) == (b.schema_name or None)
     )
 
 
@@ -324,11 +320,11 @@ def _bind_session_database(tenant_id: str) -> str:
     _DB_SCHEMA_SUMMARY = describe_manifest_for_prompt(_manifest, _schema_snapshot)
     _db_path = engine.config.database
     DB_FAST_PATH_TOOLS = [_make_fast_path_tool(t.name) for t in _manifest.tools]
-    if engine.config.dialect == "sqlite":
+    if engine.has_ticket_tables():
         TICKET_TOOLS = [_make_ticket_tool(t) for t in TICKET_TOOL_DEFINITIONS]
     else:
         TICKET_TOOLS = []
-        logger.info("Ticket tools omitted for non-sqlite dialect %s", engine.config.dialect)
+        logger.info("Ticket tools omitted; connected database has no tickets tables")
 
     logger.info(
         "Session DB bound: %s schema_hash=%s tools=%d",

@@ -8,23 +8,31 @@ tools, and **doc-retrieval** for policy document grounding.
 ## Architecture
 
 ```
-React Frontend (Vite)  →  FastAPI Backend  →  PostgreSQL / SQLite (documents/RAG)
-                              ↓                        ↑
+React Frontend (Vite)  →  FastAPI Backend  →  PostgreSQL
+                              │                    │
+                              │                    ├─ public: documents, document_chunks (RAG)
+                              │                    └─ business: customers, claims, invoices, …
+                              ▼
                          sql-mcp (fast-path)     doc-retrieval (fast-path RAG)
-                              ↓
-                    SQLite medical-billing demo DB
 
-LiveKit Room  ↔  LiveKit Voice Agent (Python)  ↔  sql-mcp fast-path tools
+LiveKit Room  ↔  LiveKit Voice Agent (Python)  ↔  sql-mcp PostgreSQL tools
                                                 ↔  ticket workflow tools
                                                 ↔  doc-retrieval search tool
 ```
 
-Database access and document RAG remain two **independent** tools, both compiled/cached
-once at startup rather than discovered per turn.
+Development and production share one SQL-MCP implementation. The connection is
+configured with `DATABASE_URL` (local PostgreSQL or Render's **internal** Postgres URL).
+
+`demo_database.db` is the original SQLite demo/seed database. It is **not** used at
+runtime in production. Use it only as the migration source:
+
+```
+demo_database.db  →  scripts/migrate_sqlite_to_postgres.py  →  PostgreSQL (business schema)
+```
 
 ## Demo Domain
 
-The default SQLite database models a medical billing BPO:
+The business schema models a medical billing BPO:
 
 | Table | Purpose |
 |-------|---------|
@@ -45,11 +53,11 @@ failed payments, and open/escalated/resolved tickets (for example `CLM10002`, `I
 
 - Node.js 18+
 - Python 3.10+
-- PostgreSQL (for document storage; SQLite fallback is supported)
+- PostgreSQL 14+ (local development; Render provides this in production)
 - LiveKit Cloud or self-hosted LiveKit server
 - Gemini API key
 
-## Setup
+## Setup (local)
 
 1. Copy environment variables:
 
@@ -57,13 +65,27 @@ failed payments, and open/escalated/resolved tickets (for example `CLM10002`, `I
 cp .env.example .env
 ```
 
-2. Install frontend dependencies:
+2. Create a local database (example):
+
+```bash
+psql -U postgres -c "CREATE DATABASE voice_agent;"
+```
+
+3. Set `DATABASE_URL` in `.env`, for example:
+
+```
+DATABASE_URL=postgresql://postgres:postgres@localhost:5432/voice_agent
+SQL_MCP_DIALECT=postgresql
+SQL_MCP_SCHEMA=business
+```
+
+4. Install frontend dependencies:
 
 ```bash
 npm install
 ```
 
-3. Install Python dependencies:
+5. Install Python dependencies:
 
 ```bash
 pip3 install -r backend/requirements.txt
@@ -72,14 +94,35 @@ pip3 install -e doc-retrieval
 pip3 install -r voice-agent/requirements.txt
 ```
 
-4. Initialize (or rebuild) the medical billing demo database:
+6. Rebuild the SQLite seed file if needed (optional; `demo_database.db` already exists):
 
 ```bash
 npm run init:demo-db
-# or: python3 scripts/init_demo_database.py
+# or: python scripts/init_demo_database.py
 ```
 
-5. Start the stack:
+7. Migrate SQLite business data into PostgreSQL (also creates RAG tables if missing):
+
+```bash
+npm run migrate:postgres
+# or: python scripts/migrate_sqlite_to_postgres.py --init-rag
+```
+
+Safe by default: existing PostgreSQL business data is not overwritten. To rebuild the
+`business` schema only (never `public` RAG tables):
+
+```bash
+python scripts/migrate_sqlite_to_postgres.py --reset --init-rag
+```
+
+8. Verify row counts:
+
+```bash
+npm run verify:postgres
+# or: python scripts/migrate_sqlite_to_postgres.py --verify
+```
+
+9. Start the stack:
 
 ```bash
 # Terminal 1 — API + frontend
@@ -92,6 +135,10 @@ npm run dev:voice-agent
 - Frontend: http://localhost:3000
 - FastAPI: http://localhost:8000
 - API docs: http://localhost:8000/docs
+
+SQL-MCP in development can still be pointed at SQLite with `SQL_MCP_DIALECT=sqlite` and
+`SQL_MCP_DATABASE=demo_database.db` for debugging the seed file. Do not use that in
+production (`RENDER` / `APP_ENV=production` refuse SQLite).
 
 ### Demo policy documents
 
@@ -161,8 +208,42 @@ freeform SQL generation for common lookups.
 
 ```bash
 npm run test:demo
-# or: python3 -m pytest sql-mcp/tests -q
+# or: python -m pytest sql-mcp/tests -q
 ```
+
+SQLite tests exercise the seed file. PostgreSQL tests run against the migrated
+`business` schema when `DATABASE_URL` / local Postgres is reachable.
+
+## Deploy on Render
+
+The repo includes `render.yaml` (Singapore region) with:
+
+- Render PostgreSQL (`voice_agent`)
+- Web service (Vite build + FastAPI, serves `dist/` and `/api/*`)
+- LiveKit worker (`python voice-agent/agent.py start`)
+
+**Build (Docker):** `npm ci && npm run build` plus Python installs (see `Dockerfile`).
+
+**Start (web):** `python scripts/migrate_sqlite_to_postgres.py --init-rag` then
+`python -m uvicorn app.main:app --host 0.0.0.0 --port $PORT` from `backend/`.
+
+Set these in the Render dashboard (Blueprint `sync: false` keys):
+
+- `GEMINI_API_KEY` / `GOOGLE_API_KEY`
+- `LIVEKIT_URL`, `LIVEKIT_API_KEY`, `LIVEKIT_API_SECRET`
+- `APP_URL` (the public web service URL)
+
+`DATABASE_URL` is wired from the Render database **internal** connection string.
+Do not paste the external hostname into the web service when it runs in the same region.
+
+pgvector is **not** required. RAG stores embeddings as `TEXT` in `public.document_chunks`.
+
+## What Changed (v5 — PostgreSQL production)
+
+- SQL-MCP business data lives in PostgreSQL schema `business`
+- RAG/document tables remain in PostgreSQL `public`
+- SQLite `demo_database.db` is seed/migration source only
+- Added `scripts/migrate_sqlite_to_postgres.py` and Render/Docker packaging
 
 ## What Changed (v4 — Medical Billing BPO)
 

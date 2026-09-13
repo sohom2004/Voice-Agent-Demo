@@ -2,8 +2,11 @@ from __future__ import annotations
 
 from contextlib import asynccontextmanager
 
+from pathlib import Path
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
 
 from .config import settings
 from .routes.chat import router as chat_router
@@ -46,6 +49,11 @@ async def health():
         "status": "ok",
         "backend": "fastapi",
         "voice": "livekit",
-        "database": "sql-mcp",
+        "database": "postgresql",
         "ingestion": "python-worker",
     }
+
+
+_DIST = Path(__file__).resolve().parents[2] / "dist"
+if _DIST.is_dir():
+    app.mount("/", StaticFiles(directory=_DIST, html=True), name="frontend")
