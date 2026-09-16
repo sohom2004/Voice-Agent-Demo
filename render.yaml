@@ -1,5 +1,6 @@
 databases:
   - name: voice-agent-db
+    plan: free
     region: singapore
     databaseName: voice_agent
     user: voice_agent
@@ -8,6 +9,7 @@ databases:
 services:
   - type: web
     name: voice-agent-web
+    plan: free
     runtime: docker
     region: singapore
     dockerfilePath: ./Dockerfile
@@ -23,6 +25,11 @@ services:
         value: postgresql
       - key: SQL_MCP_SCHEMA
         value: business
+      # Runs the LiveKit voice agent as a subprocess of this web service
+      # instead of a separate Background Worker, since Render's free tier
+      # has no free instance type for workers.
+      - key: RUN_VOICE_AGENT_INPROCESS
+        value: "true"
       - key: GEMINI_API_KEY
         sync: false
       - key: GOOGLE_API_KEY
@@ -34,32 +41,4 @@ services:
       - key: LIVEKIT_API_SECRET
         sync: false
       - key: APP_URL
-        sync: false
-
-  - type: worker
-    name: voice-agent-livekit
-    runtime: docker
-    region: singapore
-    dockerfilePath: ./Dockerfile
-    dockerCommand: sh -c "python scripts/migrate_sqlite_to_postgres.py --init-rag && python voice-agent/agent.py start"
-    envVars:
-      - key: DATABASE_URL
-        fromDatabase:
-          name: voice-agent-db
-          property: connectionString
-      - key: APP_ENV
-        value: production
-      - key: SQL_MCP_DIALECT
-        value: postgresql
-      - key: SQL_MCP_SCHEMA
-        value: business
-      - key: GEMINI_API_KEY
-        sync: false
-      - key: GOOGLE_API_KEY
-        sync: false
-      - key: LIVEKIT_URL
-        sync: false
-      - key: LIVEKIT_API_KEY
-        sync: false
-      - key: LIVEKIT_API_SECRET
         sync: false

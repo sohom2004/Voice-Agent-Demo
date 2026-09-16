@@ -1,0 +1,17 @@
+backend
+voice-agent
+sql-mcp
+doc-retrieval
+db-agent
+demo-docs
+scripts
+uploads
+assets
+.sqlmcp
+.pytest_cache
+*.db
+demo_database.db
+test_connector_database.db
+refresh-token.py
+Dockerfile
+render.yaml

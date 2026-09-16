@@ -214,29 +214,80 @@ npm run test:demo
 SQLite tests exercise the seed file. PostgreSQL tests run against the migrated
 `business` schema when `DATABASE_URL` / local Postgres is reachable.
 
-## Deploy on Render
+## Deploy: Render (backend) + Vercel (frontend), both on free tiers
 
-The repo includes `render.yaml` (Singapore region) with:
+The API/backend and the static frontend are deployed separately so both sides can run
+on free hosting:
 
-- Render PostgreSQL (`voice_agent`)
-- Web service (Vite build + FastAPI, serves `dist/` and `/api/*`)
-- LiveKit worker (`python voice-agent/agent.py start`)
+- **Render** — free Postgres + free Web Service running FastAPI (`backend/app/main.py`).
+  The LiveKit voice agent (`voice-agent/agent.py`) is launched as a **subprocess inside
+  that same web service** (see `RUN_VOICE_AGENT_INPROCESS` below) instead of a separate
+  Background Worker, because Render's free tier only offers a free instance type for
+  Web Services — Background Workers require a paid plan.
+- **Vercel** — free static hosting for the Vite build (`dist/`). A rewrite in
+  `vercel.json` proxies `/api/*` to the Render backend so the frontend's existing
+  relative `fetch('/api/...')` calls keep working unchanged, all under one Vercel URL.
 
-**Build (Docker):** `npm ci && npm run build` plus Python installs (see `Dockerfile`).
+```
+Browser
+  → Vercel (static React build)
+      /api/*  → rewritten → Render (FastAPI + in-process LiveKit worker) → Postgres
+  → LiveKit Cloud (voice media connects directly from the browser, not through Render/Vercel)
+```
 
-**Start (web):** `python scripts/migrate_sqlite_to_postgres.py --init-rag` then
-`python -m uvicorn app.main:app --host 0.0.0.0 --port $PORT` from `backend/`.
+### 1. Render — backend + database
 
-Set these in the Render dashboard (Blueprint `sync: false` keys):
+The repo includes `render.yaml` (Singapore region, both resources on the `free` plan):
+
+- Render PostgreSQL (`voice_agent`) — free plan; note Render's free Postgres databases
+  expire after 90 days and must be recreated/re-migrated.
+- Web service (`voice-agent-web`, Docker, free plan) — runs
+  `python scripts/migrate_sqlite_to_postgres.py --init-rag` then
+  `uvicorn app.main:app` from `backend/`, and starts the LiveKit voice agent as a
+  subprocess of the same instance.
+
+In the Render dashboard, create a **Blueprint** from this repo (uses `render.yaml`),
+then set these `sync: false` keys on `voice-agent-web`:
 
 - `GEMINI_API_KEY` / `GOOGLE_API_KEY`
 - `LIVEKIT_URL`, `LIVEKIT_API_KEY`, `LIVEKIT_API_SECRET`
-- `APP_URL` (the public web service URL)
+- `APP_URL` (set this to your Vercel frontend URL once you have it)
 
-`DATABASE_URL` is wired from the Render database **internal** connection string.
-Do not paste the external hostname into the web service when it runs in the same region.
+`DATABASE_URL` is wired automatically from the Render database's **internal** connection
+string. `RUN_VOICE_AGENT_INPROCESS=true` is already set in `render.yaml` — this is what
+makes the voice agent start alongside the API on the free web service instance. Free
+web services spin down after ~15 minutes of inactivity, so the voice agent subprocess
+only runs while something has recently hit the API (a request wakes it back up, with a
+cold-start delay).
 
 pgvector is **not** required. RAG stores embeddings as `TEXT` in `public.document_chunks`.
+
+Once deployed, note the service URL (e.g. `https://voice-agent-web.onrender.com`).
+
+### 2. Vercel — frontend
+
+1. Import this repo into Vercel. Framework preset: **Vite**. Build command
+   `npm run build`, output directory `dist` (already set in `vercel.json`).
+   `.vercelignore` excludes the Python backend/agent code so only the frontend ships.
+2. In `vercel.json`, update the rewrite `destination` to your actual Render URL from
+   step 1 if it differs from `https://voice-agent-web.onrender.com`:
+
+   ```json
+   { "source": "/api/(.*)", "destination": "https://<your-render-service>.onrender.com/api/$1" }
+   ```
+
+3. Deploy. No frontend env vars are required — all API calls are relative (`/api/...`)
+   and Vercel's rewrite forwards them to Render server-side.
+4. Set `APP_URL` on the Render web service to this Vercel URL (used for links such as
+   e-mails sent by the agent).
+
+### Notes / free-tier tradeoffs
+
+- Both free services (Render web + Postgres) can sleep/expire; expect occasional
+  cold-start latency and a Postgres re-migration every ~90 days.
+- If you outgrow the free tier, move the LiveKit agent back to a dedicated Render
+  Background Worker (paid) by setting `RUN_VOICE_AGENT_INPROCESS=false` on the web
+  service and re-adding a `type: worker` block to `render.yaml`.
 
 ## What Changed (v5 — PostgreSQL production)
 
