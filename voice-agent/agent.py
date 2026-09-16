@@ -26,6 +26,7 @@ from livekit.agents import (  # noqa: E402
     AgentServer,
     AgentSession,
     JobContext,
+    JobExecutorType,
     TurnHandlingOptions,
     cli,
     function_tool,
@@ -346,6 +347,16 @@ server = AgentServer(
     # dedicated free instance handling one call at a time, not a shared
     # worker fleet the load check is meant to protect, so disable it.
     load_threshold=math.inf,
+    # Default prod behavior prewarms an idle job *process* (a second full
+    # copy of numpy/google-genai/etc alongside the already-running FastAPI
+    # + ingestion worker) so the very first call has no cold start. On
+    # Render's free 512MB instance that pushed memory over the limit and
+    # OOM-crash-looped the whole container every couple of minutes (visible
+    # as repeated restarts / 502s). Run jobs as an in-process thread and
+    # don't prewarm anything — costs a few seconds of cold start on the
+    # first call after a deploy/restart, but fits in the free memory budget.
+    job_executor_type=JobExecutorType.THREAD,
+    num_idle_processes=0,
 )
 
 
