@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import logging
+import math
 import os
 import sys
 from pathlib import Path
@@ -337,7 +338,15 @@ def _bind_session_database(tenant_id: str) -> str:
 
 INSTRUCTIONS = build_system_prompt(_DB_SCHEMA_SUMMARY)
 
-server = AgentServer()
+server = AgentServer(
+    # Render's free instance type has very limited/burstable CPU, so the
+    # library's default CPU-load self-throttle (prod default threshold 0.7)
+    # reports the worker "at full capacity" almost immediately even while
+    # idle, and it never accepts a dispatched call. This is a single
+    # dedicated free instance handling one call at a time, not a shared
+    # worker fleet the load check is meant to protect, so disable it.
+    load_threshold=math.inf,
+)
 
 
 @server.rtc_session()
