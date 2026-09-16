@@ -352,11 +352,19 @@ server = AgentServer(
     # + ingestion worker) so the very first call has no cold start. On
     # Render's free 512MB instance that pushed memory over the limit and
     # OOM-crash-looped the whole container every couple of minutes (visible
-    # as repeated restarts / 502s). Run jobs as an in-process thread and
-    # don't prewarm anything — costs a few seconds of cold start on the
-    # first call after a deploy/restart, but fits in the free memory budget.
+    # as repeated restarts / 502s). Run jobs as an in-process *thread*
+    # instead, which shares the already-loaded process memory rather than
+    # forking a new copy of it.
+    #
+    # Keep one idle thread prewarmed (num_idle_processes=1, the default):
+    # a prewarmed *thread* costs only a thread stack + a duplex socket, not
+    # a second full process, so it doesn't reintroduce the OOM issue. Without
+    # it (num_idle_processes=0), the job executor only starts/initializes
+    # *after* the call connects, adding a visible delay before the agent's
+    # first words — this is what caused the "agent takes a moment to start
+    # talking" lag.
     job_executor_type=JobExecutorType.THREAD,
-    num_idle_processes=0,
+    num_idle_processes=1,
 )
 
 
