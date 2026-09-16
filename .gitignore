@@ -39,3 +39,4 @@ refresh-token.py
 *.sln
 *.swp
 .pytest_cache/
+.vercel

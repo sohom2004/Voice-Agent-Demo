@@ -237,49 +237,45 @@ Browser
 
 ### 1. Render — backend + database
 
-The repo includes `render.yaml` (Singapore region, both resources on the `free` plan):
+The repo includes `render.yaml` (Singapore region, both resources on the `free` plan) as
+a reference/reproducibility file. This instance was provisioned directly via the Render
+REST API rather than the dashboard Blueprint flow (Blueprint *creation* isn't exposed by
+that API — only sync/update of an existing one), so the live resources are:
 
-- Render PostgreSQL (`voice_agent`) — free plan; note Render's free Postgres databases
-  expire after 90 days and must be recreated/re-migrated.
-- Web service (`voice-agent-web`, Docker, free plan) — runs
-  `python scripts/migrate_sqlite_to_postgres.py --init-rag` then
-  `uvicorn app.main:app` from `backend/`, and starts the LiveKit voice agent as a
-  subprocess of the same instance.
+- Render PostgreSQL — `voice-agent-db` (free plan; Render's free Postgres databases
+  expire ~30 days after creation and must be recreated/re-migrated).
+- Web service — **`voice-agent-api`**, Docker, free plan, Singapore, live at
+  **`https://voice-agent-api-8jc7.onrender.com`**. Runs
+  `python scripts/migrate_sqlite_to_postgres.py --init-rag` then `uvicorn app.main:app`
+  from `backend/`, and starts the LiveKit voice agent as a subprocess of the same
+  instance (`RUN_VOICE_AGENT_INPROCESS=true`).
 
-In the Render dashboard, create a **Blueprint** from this repo (uses `render.yaml`),
-then set these `sync: false` keys on `voice-agent-web`:
+If you recreate this from scratch via the dashboard **Blueprint** flow instead, `render.yaml`
+wires `DATABASE_URL` automatically from the database's internal connection string. Doing
+it by hand (as done here) means the `DATABASE_URL` env var must be set manually to that
+internal connection string via the Render dashboard (Database → Connect → Internal
+Database URL) — it's not fetched/echoed through the API for a database you don't own the
+session for, by design.
 
-- `GEMINI_API_KEY` / `GOOGLE_API_KEY`
-- `LIVEKIT_URL`, `LIVEKIT_API_KEY`, `LIVEKIT_API_SECRET`
-- `APP_URL` (set this to your Vercel frontend URL once you have it)
-
-`DATABASE_URL` is wired automatically from the Render database's **internal** connection
-string. `RUN_VOICE_AGENT_INPROCESS=true` is already set in `render.yaml` — this is what
-makes the voice agent start alongside the API on the free web service instance. Free
-web services spin down after ~15 minutes of inactivity, so the voice agent subprocess
-only runs while something has recently hit the API (a request wakes it back up, with a
-cold-start delay).
+Free web services spin down after ~15 minutes of inactivity, so the in-process voice
+agent subprocess only runs while something has recently hit the API (a request wakes it
+back up, with a cold-start delay).
 
 pgvector is **not** required. RAG stores embeddings as `TEXT` in `public.document_chunks`.
 
-Once deployed, note the service URL (e.g. `https://voice-agent-web.onrender.com`).
-
 ### 2. Vercel — frontend
 
-1. Import this repo into Vercel. Framework preset: **Vite**. Build command
-   `npm run build`, output directory `dist` (already set in `vercel.json`).
-   `.vercelignore` excludes the Python backend/agent code so only the frontend ships.
-2. In `vercel.json`, update the rewrite `destination` to your actual Render URL from
-   step 1 if it differs from `https://voice-agent-web.onrender.com`:
+Deployed at **`https://voice-agent-demo-alpha.vercel.app`** (project `voice-agent-demo`,
+linked to this GitHub repo for auto-deploy on push to `main`). Framework preset: **Vite**,
+via an explicit `services.frontend` block in `vercel.json` (needed because Vercel's
+zero-config multi-service detection otherwise also picks up the root `Dockerfile` as a
+second, ambiguous service). `.vercelignore` excludes the Python backend/agent code so
+only the frontend ships.
 
-   ```json
-   { "source": "/api/(.*)", "destination": "https://<your-render-service>.onrender.com/api/$1" }
-   ```
-
-3. Deploy. No frontend env vars are required — all API calls are relative (`/api/...`)
-   and Vercel's rewrite forwards them to Render server-side.
-4. Set `APP_URL` on the Render web service to this Vercel URL (used for links such as
-   e-mails sent by the agent).
+`vercel.json`'s rewrite forwards `/api/*` to `https://voice-agent-api-8jc7.onrender.com`,
+so the frontend's relative `fetch('/api/...')` calls work unchanged. No frontend env vars
+are required. `APP_URL` on the Render web service is set to this Vercel URL (used for
+links such as e-mails sent by the agent).
 
 ### Notes / free-tier tradeoffs
 

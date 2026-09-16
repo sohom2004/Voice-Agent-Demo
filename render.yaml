@@ -8,7 +8,7 @@ databases:
 
 services:
   - type: web
-    name: voice-agent-web
+    name: voice-agent-api
     plan: free
     runtime: docker
     region: singapore
