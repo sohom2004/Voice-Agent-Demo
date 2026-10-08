@@ -7,6 +7,11 @@ from ..services.chat import generate_chat_response, generate_tts
 router = APIRouter(prefix="/api", tags=["chat"])
 
 
+import logging
+
+logger = logging.getLogger("app.routes.chat")
+
+
 @router.post("/chat")
 async def chat(payload: dict):
     message = payload.get("message", "")
@@ -20,19 +25,29 @@ async def chat(payload: dict):
     voice_name = payload.get("selectedVoice", "Kore")
     generate_audio = payload.get("generateAudio", True)
 
-    # Document context is no longer fetched unconditionally on every message —
-    # the model calls the search_documents tool itself only when the question
-    # is actually about uploaded documents, so a pure database question no
-    # longer pays for an embedding call + full chunk scan it doesn't need.
-    return await generate_chat_response(
-        message=message,
-        history=history,
-        tenant_id=tenant_id,
-        workspace_id=workspace_id,
-        document_ids=document_ids,
-        voice_name=voice_name,
-        generate_audio=generate_audio,
-    )
+    try:
+        return await generate_chat_response(
+            message=message,
+            history=history,
+            tenant_id=tenant_id,
+            workspace_id=workspace_id,
+            document_ids=document_ids,
+            voice_name=voice_name,
+            generate_audio=generate_audio,
+        )
+    except Exception as exc:
+        logger.exception("Failed to generate chat response: %s", exc)
+        return {
+            "text": "I'm temporarily experiencing high demand from the AI provider. Please try asking again in a few moments.",
+            "audioBase64": None,
+            "suggestedQuestions": [
+                "Why was claim CLM10002 denied?",
+                "What is the status of ticket TKT10001?",
+                "What is the policy for appealing a denied claim?",
+            ],
+            "groundedDocs": [],
+            "error": str(exc),
+        }
 
 
 @router.post("/tts")

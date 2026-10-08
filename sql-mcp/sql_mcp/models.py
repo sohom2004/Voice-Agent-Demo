@@ -48,21 +48,29 @@ class ConnectionConfig:
             or raw.get("connectionString")
             or raw.get("connection_string")
         )
-        dialect_default = "postgres" if connection_url else "sqlite"
+        dialect_env = os.getenv("SQL_MCP_DIALECT") or ("postgres" if os.getenv("DATABASE_URL") else None)
+        dialect_default = "postgres" if connection_url else (_normalize_dialect(dialect_env) if dialect_env else "sqlite")
         schema_name = (
             raw.get("schemaName")
             or raw.get("schema_name")
             or raw.get("schema")
             or raw.get("searchPath")
+            or os.getenv("SQL_MCP_SCHEMA")
+            or (DEFAULT_BUSINESS_SCHEMA if dialect_default == "postgres" else None)
+        )
+        default_db = (
+            os.getenv("SQL_MCP_DATABASE")
+            or os.getenv("PGDATABASE")
+            or ("voice_agent" if dialect_default == "postgres" else "demo_database.db")
         )
         cfg = cls(
             tenant_id=str(tenant_id),
             dialect=_normalize_dialect(raw.get("dialect", dialect_default)),
-            host=raw.get("host", "localhost"),
-            port=int(raw.get("port", 5432) or 5432),
-            user=raw.get("user", "postgres"),
-            password=raw.get("password", "postgres"),
-            database=raw.get("database", "demo_database.db"),
+            host=raw.get("host", os.getenv("SQL_MCP_HOST") or os.getenv("PGHOST") or "localhost"),
+            port=int(raw.get("port") or os.getenv("SQL_MCP_PORT") or os.getenv("PGPORT") or 5432),
+            user=raw.get("user", os.getenv("SQL_MCP_USER") or os.getenv("PGUSER") or "postgres"),
+            password=raw.get("password", os.getenv("SQL_MCP_PASSWORD") or os.getenv("PGPASSWORD") or ""),
+            database=raw.get("database", default_db),
             connection_url=connection_url,
             schema_name=str(schema_name) if schema_name else None,
         )

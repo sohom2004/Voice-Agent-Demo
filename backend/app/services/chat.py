@@ -99,6 +99,38 @@ async def _dispatch_tool_call(
     return await sql_mcp_service.call_tool(tenant_id, name, args)
 
 
+import logging
+
+logger = logging.getLogger("app.services.chat")
+
+FALLBACK_CHAT_MODELS = [
+    os.getenv("GEMINI_CHAT_MODEL", "gemini-3.8-flash"),
+    "gemini-3.5-flash",
+    "gemini-flash-latest",
+]
+
+
+def _generate_with_fallback(
+    client: genai.Client,
+    contents: list[types.Content],
+    config: types.GenerateContentConfig,
+):
+    last_exc = None
+    for model_name in FALLBACK_CHAT_MODELS:
+        try:
+            return client.models.generate_content(
+                model=model_name,
+                contents=contents,
+                config=config,
+            )
+        except Exception as exc:
+            last_exc = exc
+            logger.warning("Model %s generation failed (%s); trying fallback", model_name, exc)
+    if last_exc:
+        raise last_exc
+    raise RuntimeError("No chat models available.")
+
+
 async def _handle_tool_loop(
     client: genai.Client,
     contents: list[types.Content],
@@ -109,20 +141,20 @@ async def _handle_tool_loop(
 ) -> str:
     system_instruction = _system_prompt(sql_mcp_service.get_schema_prompt_summary(tenant_id))
     tools = _to_gemini_tools(tool_defs)
-    response = client.models.generate_content(
-        model="gemini-2.5-flash",
-        contents=contents,
-        config=types.GenerateContentConfig(
-            system_instruction=system_instruction,
-            tools=tools,
-            temperature=0.7,
-        ),
+    config = types.GenerateContentConfig(
+        system_instruction=system_instruction,
+        tools=tools,
+        temperature=0.7,
+        thinking_config=types.ThinkingConfig(thinking_budget=0),
     )
+    response = _generate_with_fallback(client, contents, config)
 
     for _ in range(4):
         function_calls = []
         for candidate in response.candidates or []:
-            for part in candidate.content.parts or []:
+            if not candidate.content or not candidate.content.parts:
+                continue
+            for part in candidate.content.parts:
                 if part.function_call:
                     function_calls.append(part.function_call)
 
@@ -145,15 +177,7 @@ async def _handle_tool_loop(
         contents = contents + [response.candidates[0].content] + [
             types.Content(role="user", parts=tool_responses)
         ]
-        response = client.models.generate_content(
-            model="gemini-2.5-flash",
-            contents=contents,
-            config=types.GenerateContentConfig(
-                system_instruction=system_instruction,
-                tools=tools,
-                temperature=0.7,
-            ),
-        )
+        response = _generate_with_fallback(client, contents, config)
 
     return (response.text or "").strip() or "I completed the operation."
 
@@ -174,7 +198,7 @@ async def generate_chat_response(
         contents.append(types.Content(role=role, parts=[types.Part(text=item.get("content", ""))]))
     contents.append(types.Content(role="user", parts=[types.Part(text=message)]))
 
-    tool_defs = (
+    candidate_tools = (
         sql_mcp_service.get_gemini_tools(tenant_id)
         + [
             {
@@ -186,6 +210,13 @@ async def generate_chat_response(
         ]
         + [SEARCH_DOCUMENTS_TOOL]
     )
+    seen_tool_names: set[str] = set()
+    tool_defs: list[dict] = []
+    for candidate_tool in candidate_tools:
+        if candidate_tool["name"] not in seen_tool_names:
+            seen_tool_names.add(candidate_tool["name"])
+            tool_defs.append(candidate_tool)
+
     text = await _handle_tool_loop(client, contents, tenant_id, workspace_id, document_ids, tool_defs)
 
     audio_base64 = None
