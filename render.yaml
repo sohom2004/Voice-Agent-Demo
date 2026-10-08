@@ -42,3 +42,11 @@ services:
         sync: false
       - key: APP_URL
         sync: false
+      - key: GMAIL_CLIENT_ID
+        sync: false
+      - key: GMAIL_CLIENT_SECRET
+        sync: false
+      - key: GMAIL_REFRESH_TOKEN
+        sync: false
+      - key: GMAIL_USER_EMAIL
+        sync: false
